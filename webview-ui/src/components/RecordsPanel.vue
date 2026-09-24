@@ -1034,6 +1034,7 @@ const sortedRecords = computed(() => {
 }
 
 .main-video {
+  grid-area: 1 / 1;        /* 与 img 叠在同一格，保证两个元素完全重合 */
   max-width: 100%;
   max-height: 100%;
   min-width: 0;
@@ -1045,17 +1046,21 @@ const sortedRecords = computed(() => {
   cursor: pointer;
 }
 
-/* 大视频预览首帧遮罩：叠在 video 上方，避免 loadeddata/seeked 黑屏
- * - 与 main-video 同尺寸（max-width:100% / max-height:100% / object-fit:contain）
- * - 绝对定位铺满 main-video-wrap，与 video 在视觉上重合
+/* 大视频预览首帧遮罩：与 .main-video 完全相同的盒子模型，
+ * 让 flex 容器统一管理尺寸；用 grid + place-items:center 让两个元素完美重合
  * - 播放中（isPlaying）会自动被 v-if 移除，露出 video 元素
  */
+.main-video-wrap {
+  display: grid;
+  place-items: center;
+  position: relative;
+}
 .main-frame-img {
-  position: absolute;
-  inset: 0;
-  margin: auto;
+  grid-area: 1 / 1;        /* 与 video 叠在同一格（grid 行/列） */
   max-width: 100%;
   max-height: 100%;
+  min-width: 0;
+  min-height: 0;
   object-fit: contain;
   background: #000;
   border-radius: 4px;
