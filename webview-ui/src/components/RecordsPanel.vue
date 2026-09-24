@@ -118,13 +118,17 @@ const fileUrlFailedIds = ref<Set<string>>(new Set());
 
 /**
  * 缩略图：优先用 UXP 端生成的 plugin-data Thumbs/<id>.jpg
- * - 加载顺序：cached → 询问 UXP bridge → 没拿到回退到 <video> 抽帧
+ * - 加载顺序：cached → 询问 UXP bridge → 没拿到则 ensureThumb 后台补生成，3s 轮询重试
  * - 缓存按 recordId 维度（同名 video 复用）
- * - polling 每 3 秒重试一次（UXP 异步抽帧可能还没好）
+ * - "永久失败" 仅在 ensureThumb 后仍连续 N 次拿不到才置位（避免误判历史记录）
  */
 const uxpThumbCache = ref<Record<string, string>>({});
 const uxpThumbFailed = ref<Set<string>>(new Set());
 const uxpThumbPending = ref<Set<string>>(new Set());
+const uxpThumbEnsureTried = ref<Set<string>>(new Set());
+const uxpThumbRetryCount = ref<Record<string, number>>({});
+const MAX_THUMB_RETRY = 5; // 5 次轮询（3s × 5 = 15s）后才永久标记失败
+
 async function getUxpThumbUrl(recordId: string): Promise<string | null> {
   if (!recordId) return null;
   if (uxpThumbCache.value[recordId]) return uxpThumbCache.value[recordId];
@@ -137,11 +141,24 @@ async function getUxpThumbUrl(recordId: string): Promise<string | null> {
       uxpThumbCache.value = { ...uxpThumbCache.value, [recordId]: r.url };
       return r.url;
     }
-    uxpThumbFailed.value.add(recordId);
+    // 没拿到：首次触发 ensureThumb 后台补生成（针对历史记录 / 旧下载流程漏生成场景）
+    if (!uxpThumbEnsureTried.value.has(recordId)) {
+      uxpThumbEnsureTried.value.add(recordId);
+      try {
+        await bridge.ensureThumb({ recordId });
+      } catch (e) {
+        console.warn("[RecordsPanel] ensureThumb threw:", e);
+      }
+    }
+    // 累计重试次数；超限才永久标记失败（避免首次轮询就误判）
+    const cnt = (uxpThumbRetryCount.value[recordId] || 0) + 1;
+    uxpThumbRetryCount.value = { ...uxpThumbRetryCount.value, [recordId]: cnt };
+    if (cnt >= MAX_THUMB_RETRY) {
+      uxpThumbFailed.value.add(recordId);
+    }
     return null;
   } catch (e) {
     console.warn("[RecordsPanel] getThumbUrl threw:", e);
-    uxpThumbFailed.value.add(recordId);
     return null;
   } finally {
     uxpThumbPending.value.delete(recordId);

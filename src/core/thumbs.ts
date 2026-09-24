@@ -272,4 +272,51 @@ export const thumbsCore = {
     if (!nativePath) return "";
     return "file://" + String(nativePath).replace(/ /g, "%20");
   },
+
+  /**
+   * 确保缩略图存在：已存在直接返回；不存在则从 records.json 找 record.workFile
+   * 异步触发 generate（fire-and-forget，不阻塞调用方）。
+   * - 用于 webview 启动时补全历史记录 / downloadFile 异常时漏生成的缩略图
+   * - 总是返回 { ok: true }（生成是后台异步），避免 webview 误以为失败
+   */
+  async ensureThumb(args: { recordId: string }): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const existing = await this.getThumbPath(args.recordId);
+      if (existing) return { ok: true };
+      // 异步查 records.json 拿 workFile
+      const { recordsCore } = await import("./records");
+      const rec = await recordsCore.read();
+      if (!rec.ok || !rec.data) {
+        return { ok: true, error: "records 不可读（异步生成跳过）" };
+      }
+      const r = rec.data.records.find((x) => x.id === args.recordId);
+      if (!r || !r.workFile) {
+        return { ok: true, error: "record 或 workFile 不存在" };
+      }
+      // 检查 workFile 是否还在
+      const { filesCore } = await import("./files");
+      const wf = await filesCore.getEntryAnyPath(r.workFile);
+      if (!wf || wf.isFolder) {
+        return { ok: true, error: "workFile 已不可访问" };
+      }
+      console.log(`[thumbs] ensureThumb 后台触发: ${args.recordId} ← ${r.workFile}`);
+      // 异步生成（fire-and-forget）
+      this.generate({ recordId: args.recordId, videoPath: r.workFile })
+        .then((gr) => {
+          if (!gr.ok) {
+            console.warn(`[thumbs] ensureThumb 生成失败:`, gr.error);
+          } else {
+            console.log(`[thumbs] ensureThumb 补生成成功: ${gr.thumbPath}`);
+          }
+        })
+        .catch((e) => {
+          console.warn(`[thumbs] ensureThumb 异常:`, e?.message || e);
+        });
+      return { ok: true };
+    } catch (e: any) {
+      // 兜底：永远不抛错
+      console.warn("[thumbs] ensureThumb EXCEPTION:", e?.message || e);
+      return { ok: true, error: String(e?.message || e) };
+    }
+  },
 };

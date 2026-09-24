@@ -187,6 +187,15 @@ export const api = {
     }
   },
 
+  /**
+   * 确保缩略图存在（不存在则触发后台生成）
+   * - 用于 webview 启动时补全历史记录缩略图
+   * - 总是 ok=true（生成异步后台做）
+   */
+  async ensureThumb(args: { recordId: string }): Promise<{ ok: boolean; error?: string }> {
+    return await thumbsCore.ensureThumb(args);
+  },
+
   // 时间线插入
   async insertToTimeline(args: {
     recordIds: string[];
