@@ -117,65 +117,198 @@ const loadingThumbIds = ref<Set<string>>(new Set());
 const fileUrlFailedIds = ref<Set<string>>(new Set());
 
 /**
- * 缩略图：优先用 UXP 端生成的 plugin-data Thumbs/<id>.jpg
- * - 加载顺序：cached → 询问 UXP bridge → 没拿到则 ensureThumb 后台补生成，3s 轮询重试
- * - 缓存按 recordId 维度（同名 video 复用）
- * - "永久失败" 仅在 ensureThumb 后仍连续 N 次拿不到才置位（避免误判历史记录）
+ * 缩略图：webview 端用隐藏 <video> + <canvas> + drawImage 抽首帧 → Blob URL 给 <img src> 用
+ * - 优点：webview 端有完整浏览器栈，video/canvas 工作正常
+ * - 内存缓存：recordId → blob URL（关闭面板失效，无需持久化）
+ * - 失败保护：抽帧失败 → 永久标记 + 走 <video preload=metadata> 原路径
+ * - 抽帧是 async 行为：第一次 thumbModeOf() 返回 'video'，抽帧完成后响应式刷新切到 'image'
  */
-const uxpThumbCache = ref<Record<string, string>>({});
-const uxpThumbFailed = ref<Set<string>>(new Set());
-const uxpThumbPending = ref<Set<string>>(new Set());
-const uxpThumbEnsureTried = ref<Set<string>>(new Set());
-const uxpThumbRetryCount = ref<Record<string, number>>({});
-const MAX_THUMB_RETRY = 5; // 5 次轮询（3s × 5 = 15s）后才永久标记失败
+const canvasThumbCache = ref<Record<string, string>>({});  // recordId → blob: URL
+const canvasThumbPending = ref<Set<string>>(new Set());
+const canvasThumbFailed = ref<Set<string>>(new Set());
 
-async function getUxpThumbUrl(recordId: string): Promise<string | null> {
-  if (!recordId) return null;
-  if (uxpThumbCache.value[recordId]) return uxpThumbCache.value[recordId];
-  if (uxpThumbFailed.value.has(recordId)) return null;
-  if (uxpThumbPending.value.has(recordId)) return null;
-  uxpThumbPending.value.add(recordId);
-  try {
-    const r = await bridge.getThumbUrl({ recordId });
-    if (r.ok && r.url) {
-      uxpThumbCache.value = { ...uxpThumbCache.value, [recordId]: r.url };
-      return r.url;
-    }
-    // 没拿到：首次触发 ensureThumb 后台补生成（针对历史记录 / 旧下载流程漏生成场景）
-    if (!uxpThumbEnsureTried.value.has(recordId)) {
-      uxpThumbEnsureTried.value.add(recordId);
+/**
+ * 用隐藏 <video> 加载视频 → seek 0 → canvas drawImage → toBlob → blob URL
+ * - 完整在 webview 端完成，避免 UXP 端的 video 元素 readyState 异常
+ * - 与详情区 primeFirstFrame 用同样的 seek 0.001 技巧
+ */
+async function extractFirstFrame(recordId: string, videoUrl: string): Promise<string | null> {
+  if (!videoUrl) return null;
+  return await new Promise((resolve) => {
+    const video = document.createElement("video") as HTMLVideoElement;
+    video.muted = true;
+    video.preload = "auto";
+    video.crossOrigin = "anonymous";
+    video.playsInline = true;
+    video.style.position = "fixed";
+    video.style.left = "-99999px";
+    video.style.top = "0";
+    video.style.width = "320px";
+    video.style.height = "180px";
+    video.style.display = "block";
+    video.style.opacity = "0";
+    video.style.pointerEvents = "none";
+    document.body.appendChild(video);
+
+    let settled = false;
+    const cleanup = () => {
+      try { video.remove(); } catch (_) {}
+    };
+    const done = (url: string | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(url);
+    };
+
+    // 25s 总超时
+    const timer = setTimeout(() => {
+      done(null);
+    }, 25000);
+
+    const onError = () => {
+      clearTimeout(timer);
+      done(null);
+    };
+
+    const drawFromVideo = () => {
       try {
-        await bridge.ensureThumb({ recordId });
-      } catch (e) {
-        console.warn("[RecordsPanel] ensureThumb threw:", e);
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (!vw || !vh) return false;
+        const canvas = document.createElement("canvas") as HTMLCanvasElement;
+        canvas.width = 320;
+        canvas.height = Math.round(vh * (320 / vw));
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return false;
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          clearTimeout(timer);
+          if (blob) {
+            try {
+              const url = URL.createObjectURL(blob);
+              done(url);
+            } catch (_) {
+              done(null);
+            }
+          } else {
+            done(null);
+          }
+        }, "image/jpeg", 0.7);
+        return true;
+      } catch (_) {
+        return false;
       }
+    };
+
+    const onSeeked = () => {
+      // 双保险：seeked 后再 seek 0，让画面是首帧而不是中间帧
+      try { video.currentTime = 0; } catch (_) {}
+      requestAnimationFrame(() => {
+        if (video.readyState >= 2) {
+          if (!drawFromVideo()) {
+            clearTimeout(timer);
+            done(null);
+          }
+        } else {
+          // 等第二次 seeked
+          const onSeeked2 = () => {
+            if (!drawFromVideo()) {
+              clearTimeout(timer);
+              done(null);
+            }
+          };
+          video.addEventListener("seeked", onSeeked2, { once: true });
+          setTimeout(() => {
+            if (!settled) {
+              if (video.readyState >= 2) {
+                if (!drawFromVideo()) done(null);
+              } else {
+                done(null);
+              }
+            }
+          }, 5000);
+        }
+      });
+    };
+
+    video.addEventListener("loadeddata", () => {
+      // readyState >= 2 时再 seek（loadeddata 在某些 webview 太早）
+      if (video.readyState >= 2 && video.videoWidth) {
+        try { video.currentTime = 0.001; } catch (_) {}
+      }
+    }, { once: true });
+    video.addEventListener("canplay", () => {
+      // canplay 兜底：buffer 完全 ready 后再 seek
+      if (!settled && video.videoWidth) {
+        try { video.currentTime = 0.001; } catch (_) {}
+      }
+    }, { once: true });
+    video.addEventListener("seeked", onSeeked, { once: true });
+    video.addEventListener("error", onError, { once: true });
+
+    try {
+      video.src = videoUrl;
+      video.load();
+    } catch (_) {
+      clearTimeout(timer);
+      done(null);
     }
-    // 累计重试次数；超限才永久标记失败（避免首次轮询就误判）
-    const cnt = (uxpThumbRetryCount.value[recordId] || 0) + 1;
-    uxpThumbRetryCount.value = { ...uxpThumbRetryCount.value, [recordId]: cnt };
-    if (cnt >= MAX_THUMB_RETRY) {
-      uxpThumbFailed.value.add(recordId);
+  });
+}
+
+async function getCanvasThumbUrl(rec: GenerationRecord): Promise<string | null> {
+  if (!rec || !rec.workFile) return null;
+  if (rec.status !== "generated" && rec.status !== "imported") return null;
+  // 仅对视频类记录（workFile 是 mp4）
+  if (canvasThumbCache.value[rec.id]) return canvasThumbCache.value[rec.id];
+  if (canvasThumbFailed.value.has(rec.id)) return null;
+  if (canvasThumbPending.value.has(rec.id)) return null;
+  canvasThumbPending.value.add(rec.id);
+  try {
+    // 复用 thumbUrlOf 拿到的 video URL（file:// 优先），没有就空
+    const vUrl = thumbUrlOf(rec);
+    if (!vUrl) {
+      canvasThumbFailed.value.add(rec.id);
+      return null;
     }
+    const blobUrl = await extractFirstFrame(rec.id, vUrl);
+    if (blobUrl) {
+      canvasThumbCache.value = { ...canvasThumbCache.value, [rec.id]: blobUrl };
+      return blobUrl;
+    }
+    canvasThumbFailed.value.add(rec.id);
     return null;
-  } catch (e) {
-    console.warn("[RecordsPanel] getThumbUrl threw:", e);
+  } catch (_) {
+    canvasThumbFailed.value.add(rec.id);
     return null;
   } finally {
-    uxpThumbPending.value.delete(recordId);
+    canvasThumbPending.value.delete(rec.id);
   }
 }
 
-/** 当前展示的缩略图 url：UXP 生成优先；缺则 null → 由 video 抽帧补 */
-const displayThumbCache = ref<Record<string, string>>({});
-async function displayThumbUrlOf(rec: GenerationRecord): Promise<string | null> {
-  if (!rec || !rec.workFile) return null;
-  // 仅对已生成 / 已导入状态展示缩略图（避免对 generating 占位 record 触发无谓请求）
-  if (rec.status !== "generated" && rec.status !== "imported") return null;
-  const cached = displayThumbCache.value[rec.id];
-  if (cached !== undefined) return cached;
-  const uxpUrl = await getUxpThumbUrl(rec.id);
-  displayThumbCache.value = { ...displayThumbCache.value, [rec.id]: uxpUrl || "" };
-  return uxpUrl || null;
+/** 缩略图显示模式 */
+function thumbModeOf(rec: GenerationRecord): "image" | "video" | "placeholder" {
+  if (rec.status !== "generated" && rec.status !== "imported") return "placeholder";
+  if (canvasThumbCache.value[rec.id]) return "image";
+  if (thumbUrlOf(rec)) return "video";
+  return "placeholder";
+}
+
+/**
+ * 触发 canvas 抽帧（在 mounted / records 变化 / 选中时）
+ * - 仅对 thumbModeOf === 'video' 且未被永久失败的记录触发
+ * - 抽帧是异步的，UI 先显示 <video> 缩略图，canvas 抽帧完成后响应式切到 <img>
+ */
+function triggerCanvasThumbs() {
+  for (const r of props.records) {
+    if (canvasThumbCache.value[r.id]) continue;
+    if (canvasThumbFailed.value.has(r.id)) continue;
+    if (canvasThumbPending.value.has(r.id)) continue;
+    getCanvasThumbUrl(r);
+  }
 }
 
 /** 拿单个 record 的可播放 URL（file:// 优先） */
@@ -293,38 +426,20 @@ watch(selectedId, (id) => {
 onMounted(() => {
   props.records.forEach((r) => {
     loadThumbUrl(r);
-    // 同时尝试从 UXP 端拿首帧 JPG（成功则优先用 JPG）
-    if (r.status === "generated" || r.status === "imported") {
-      getUxpThumbUrl(r.id);
-    }
     if (r.id === selectedId.value) loadVideoUrl(r);
   });
+  // 触发 webview 端 canvas 抽帧（async，完成后 thumbModeOf 自动从 'video' 切到 'image'）
+  triggerCanvasThumbs();
 });
 
-/**
- * 缩略图轮询重试：
- * - UXP 端 downloadFile 完成后才异步抽帧；轮询是为了"正在生成 → 已生成"转换后立即刷新缩略图
- * - 每 3s 扫一次，对未失败也未拿到 url 的记录重试（直到拿到或被永久标记为失败）
- * - failed 状态 3 次重试后置为永久失败，避免无意义轮询
- */
-let thumbRetryTimer: any = null;
-function startThumbRetry() {
-  if (thumbRetryTimer) return;
-  thumbRetryTimer = setInterval(async () => {
-    for (const r of props.records) {
-      if (r.status !== "generated" && r.status !== "imported") continue;
-      if (uxpThumbCache.value[r.id]) continue;
-      if (uxpThumbFailed.value.has(r.id)) continue;
-      await getUxpThumbUrl(r.id);
-    }
-  }, 3000);
-}
-function stopThumbRetry() {
-  if (thumbRetryTimer) clearInterval(thumbRetryTimer);
-  thumbRetryTimer = null;
-}
-onMounted(startThumbRetry);
-onBeforeUnmount(stopThumbRetry);
+// records 变化时（新生成 / 导入完成），补抽帧
+watch(
+  () => props.records,
+  () => {
+    triggerCanvasThumbs();
+  },
+  { deep: true },
+);
 
 function statusOf(rec: GenerationRecord): { label: string; color: string } {
   switch (rec.status) {
@@ -504,22 +619,6 @@ const sortedRecords = computed(() => {
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 });
-
-/** 缩略图同步取：UXP 优先，缺则回退 video 抽帧 URL */
-function syncThumbSrc(rec: GenerationRecord): string {
-  const c = uxpThumbCache.value[rec.id];
-  if (c) return c;
-  return thumbUrlOf(rec) || "";
-}
-
-/** 缩略图显示组件类型：'image' = UXP jpg；'video' = 原 video 抽帧；'placeholder' = 占位 */
-type ThumbMode = "image" | "video" | "placeholder";
-function thumbModeOf(rec: GenerationRecord): ThumbMode {
-  if (rec.status !== "generated" && rec.status !== "imported") return "placeholder";
-  if (uxpThumbCache.value[rec.id]) return "image";
-  if (thumbUrlOf(rec)) return "video";
-  return "placeholder";
-}
 </script>
 
 <template>
@@ -533,14 +632,14 @@ function thumbModeOf(rec: GenerationRecord): ThumbMode {
         @click="pick(rec)"
         :title="rec.prompt.slice(0, 60)"
       >
-        <!-- 优先用 UXP 端生成的首帧 JPG（轻量、立即显示） -->
+        <!-- 优先用 webview 端 canvas 抽帧得到的 blob URL（轻量、立即显示） -->
         <img
           v-if="thumbModeOf(rec) === 'image'"
-          :src="uxpThumbCache[rec.id]"
+          :src="canvasThumbCache[rec.id]"
           class="thumb-image"
           draggable="false"
         />
-        <!-- 回退：<video preload="metadata"> 抽帧（UXP 还没生成好 / 历史记录没缩略图） -->
+        <!-- 回退：<video preload="metadata"> 抽帧（canvas 抽帧进行中 / 失败） -->
         <video
           v-else-if="thumbModeOf(rec) === 'video'"
           :src="thumbUrlOf(rec)"

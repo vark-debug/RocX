@@ -13,7 +13,6 @@ import { downloadCore } from "../core/ai/download";
 import { timelineCore } from "../core/timeline";
 import { framesCore } from "../core/frames";
 import { captureVideoCore } from "../core/captureVideo";
-import { thumbsCore } from "../core/thumbs";
 import { getColorScheme, getUXPInfo, openURL } from "./uxp";
 
 const hostName =
@@ -149,51 +148,7 @@ export const api = {
       url: args.url,
       suggestedName: args.suggestedName,
     });
-    // 下载成功后，异步触发首帧缩略图生成（不阻塞主流程，失败静默）
-    if (r.ok && r.localPath) {
-      thumbsCore
-        .generate({ recordId: args.recordId, videoPath: r.localPath })
-        .then((tr) => {
-          if (!tr.ok) {
-            console.warn(
-              `[downloadFile] 缩略图生成失败 (recordId=${args.recordId}):`,
-              tr.error,
-            );
-          }
-        })
-        .catch((e) => {
-          console.warn("[downloadFile] 缩略图异常:", e?.message || e);
-        });
-    }
     return r;
-  },
-
-  /**
-   * 获取首帧缩略图 URL（按 recordId 查 plugin-data Thumbs 目录）
-   * - 文件不存在时返回 { ok: false }
-   * - webview 端拿到 url 后用 <img> 加载，不再用 <video> 当缩略图
-   */
-  async getThumbUrl(args: { recordId: string }): Promise<{
-    ok: boolean;
-    url?: string;
-    error?: string;
-  }> {
-    try {
-      const p = await thumbsCore.getThumbPath(args.recordId);
-      if (!p) return { ok: false, error: "缩略图不存在" };
-      return { ok: true, url: thumbsCore.toWebviewUrl(p) };
-    } catch (e: any) {
-      return { ok: false, error: String(e?.message || e) };
-    }
-  },
-
-  /**
-   * 确保缩略图存在（不存在则触发后台生成）
-   * - 用于 webview 启动时补全历史记录缩略图
-   * - 总是 ok=true（生成异步后台做）
-   */
-  async ensureThumb(args: { recordId: string }): Promise<{ ok: boolean; error?: string }> {
-    return await thumbsCore.ensureThumb(args);
   },
 
   // 时间线插入
