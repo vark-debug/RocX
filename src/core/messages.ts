@@ -206,6 +206,17 @@ export interface BridgeAPI {
     error?: string;
   }>;
 
+  /**
+   * 获取首帧缩略图 URL（按 recordId 查 plugin-data Thumbs 目录）
+   * - 文件不存在返回 ok:false，webview 端应回退到原 <video> 抽帧
+   * - 缩略图由 UXP 端在 downloadFile 成功后异步生成
+   */
+  getThumbUrl(args: { recordId: string }): Promise<{
+    ok: boolean;
+    url?: string;
+    error?: string;
+  }>;
+
   /** 把指定记录复制到 PR 项目旁并导入 + 插入时间线（事务化） */
   insertToTimeline(args: {
     recordIds: string[];

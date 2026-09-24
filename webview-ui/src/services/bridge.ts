@@ -47,4 +47,6 @@ export const bridge = {
     ensure().captureWorkAreaAndUploadAsReference(args),
   captureWorkAreaOnlyAsReference: (args?: any) =>
     ensure().captureWorkAreaOnlyAsReference(args),
+  /** 缩略图（按 recordId 查 plugin-data Thumbs 目录） */
+  getThumbUrl: (args: { recordId: string }) => ensure().getThumbUrl(args),
 };

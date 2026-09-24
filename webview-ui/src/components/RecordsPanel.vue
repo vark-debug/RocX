@@ -74,6 +74,51 @@ const loadingVideoIds = ref<Set<string>>(new Set());
 const loadingThumbIds = ref<Set<string>>(new Set());
 const fileUrlFailedIds = ref<Set<string>>(new Set());
 
+/**
+ * 缩略图：优先用 UXP 端生成的 plugin-data Thumbs/<id>.jpg
+ * - 加载顺序：cached → 询问 UXP bridge → 没拿到回退到 <video> 抽帧
+ * - 缓存按 recordId 维度（同名 video 复用）
+ * - polling 每 3 秒重试一次（UXP 异步抽帧可能还没好）
+ */
+const uxpThumbCache = ref<Record<string, string>>({});
+const uxpThumbFailed = ref<Set<string>>(new Set());
+const uxpThumbPending = ref<Set<string>>(new Set());
+async function getUxpThumbUrl(recordId: string): Promise<string | null> {
+  if (!recordId) return null;
+  if (uxpThumbCache.value[recordId]) return uxpThumbCache.value[recordId];
+  if (uxpThumbFailed.value.has(recordId)) return null;
+  if (uxpThumbPending.value.has(recordId)) return null;
+  uxpThumbPending.value.add(recordId);
+  try {
+    const r = await bridge.getThumbUrl({ recordId });
+    if (r.ok && r.url) {
+      uxpThumbCache.value = { ...uxpThumbCache.value, [recordId]: r.url };
+      return r.url;
+    }
+    uxpThumbFailed.value.add(recordId);
+    return null;
+  } catch (e) {
+    console.warn("[RecordsPanel] getThumbUrl threw:", e);
+    uxpThumbFailed.value.add(recordId);
+    return null;
+  } finally {
+    uxpThumbPending.value.delete(recordId);
+  }
+}
+
+/** 当前展示的缩略图 url：UXP 生成优先；缺则 null → 由 video 抽帧补 */
+const displayThumbCache = ref<Record<string, string>>({});
+async function displayThumbUrlOf(rec: GenerationRecord): Promise<string | null> {
+  if (!rec || !rec.workFile) return null;
+  // 仅对已生成 / 已导入状态展示缩略图（避免对 generating 占位 record 触发无谓请求）
+  if (rec.status !== "generated" && rec.status !== "imported") return null;
+  const cached = displayThumbCache.value[rec.id];
+  if (cached !== undefined) return cached;
+  const uxpUrl = await getUxpThumbUrl(rec.id);
+  displayThumbCache.value = { ...displayThumbCache.value, [rec.id]: uxpUrl || "" };
+  return uxpUrl || null;
+}
+
 /** 拿单个 record 的可播放 URL（file:// 优先） */
 async function resolveUrl(rec: GenerationRecord): Promise<string> {
   if (fileUrlFailedIds.value.has(rec.id)) {
@@ -189,9 +234,38 @@ watch(selectedId, (id) => {
 onMounted(() => {
   props.records.forEach((r) => {
     loadThumbUrl(r);
+    // 同时尝试从 UXP 端拿首帧 JPG（成功则优先用 JPG）
+    if (r.status === "generated" || r.status === "imported") {
+      getUxpThumbUrl(r.id);
+    }
     if (r.id === selectedId.value) loadVideoUrl(r);
   });
 });
+
+/**
+ * 缩略图轮询重试：
+ * - UXP 端 downloadFile 完成后才异步抽帧；轮询是为了"正在生成 → 已生成"转换后立即刷新缩略图
+ * - 每 3s 扫一次，对未失败也未拿到 url 的记录重试（直到拿到或被永久标记为失败）
+ * - failed 状态 3 次重试后置为永久失败，避免无意义轮询
+ */
+let thumbRetryTimer: any = null;
+function startThumbRetry() {
+  if (thumbRetryTimer) return;
+  thumbRetryTimer = setInterval(async () => {
+    for (const r of props.records) {
+      if (r.status !== "generated" && r.status !== "imported") continue;
+      if (uxpThumbCache.value[r.id]) continue;
+      if (uxpThumbFailed.value.has(r.id)) continue;
+      await getUxpThumbUrl(r.id);
+    }
+  }, 3000);
+}
+function stopThumbRetry() {
+  if (thumbRetryTimer) clearInterval(thumbRetryTimer);
+  thumbRetryTimer = null;
+}
+onMounted(startThumbRetry);
+onBeforeUnmount(stopThumbRetry);
 
 function statusOf(rec: GenerationRecord): { label: string; color: string } {
   switch (rec.status) {
@@ -371,6 +445,22 @@ const sortedRecords = computed(() => {
     (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 });
+
+/** 缩略图同步取：UXP 优先，缺则回退 video 抽帧 URL */
+function syncThumbSrc(rec: GenerationRecord): string {
+  const c = uxpThumbCache.value[rec.id];
+  if (c) return c;
+  return thumbUrlOf(rec) || "";
+}
+
+/** 缩略图显示组件类型：'image' = UXP jpg；'video' = 原 video 抽帧；'placeholder' = 占位 */
+type ThumbMode = "image" | "video" | "placeholder";
+function thumbModeOf(rec: GenerationRecord): ThumbMode {
+  if (rec.status !== "generated" && rec.status !== "imported") return "placeholder";
+  if (uxpThumbCache.value[rec.id]) return "image";
+  if (thumbUrlOf(rec)) return "video";
+  return "placeholder";
+}
 </script>
 
 <template>
@@ -384,8 +474,16 @@ const sortedRecords = computed(() => {
         @click="pick(rec)"
         :title="rec.prompt.slice(0, 60)"
       >
+        <!-- 优先用 UXP 端生成的首帧 JPG（轻量、立即显示） -->
+        <img
+          v-if="thumbModeOf(rec) === 'image'"
+          :src="uxpThumbCache[rec.id]"
+          class="thumb-image"
+          draggable="false"
+        />
+        <!-- 回退：<video preload="metadata"> 抽帧（UXP 还没生成好 / 历史记录没缩略图） -->
         <video
-          v-if="thumbUrlOf(rec)"
+          v-else-if="thumbModeOf(rec) === 'video'"
           :src="thumbUrlOf(rec)"
           class="thumb-video"
           muted
@@ -596,6 +694,16 @@ const sortedRecords = computed(() => {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+/* UXP 端抽帧 JPG（首帧缓存），与 .thumb-video 共用 16:9 容器布局 */
+.thumb-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* 防止图片未加载完成时容器塌缩到 0（与 .thumb-item 的 aspect-ratio:16/9 配合即可） */
+  background: #000;
 }
 
 .thumb-placeholder {
