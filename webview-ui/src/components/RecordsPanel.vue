@@ -787,6 +787,13 @@ const sortedRecords = computed(() => {
 .failed-msg {
   margin-bottom: 2px;
   word-break: break-word;
+  /* 提示词过长时最多显示 4 行并省略，避免撑高失败卡片挤掉视频预览 */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-clamp: 4;
 }
 .failed-req {
   opacity: 0.7;
