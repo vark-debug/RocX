@@ -594,7 +594,7 @@ const sortedRecords = computed(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 6px 8px 100px; // bottom padding 让出浮动 prompt 栏
+  padding: 6px 8px 4px; // 底部只留少量间距：让 .preview-area 自身贴近下方的 .floating-prompt-bar
   overflow: hidden;
   min-width: 0;
 }
@@ -604,7 +604,6 @@ const sortedRecords = computed(() => {
   flex-direction: column;
   gap: 2px;
   padding: 0 0 4px;
-  border-bottom: 1px solid var(--uxp-host-border-color, #454545);
   flex-shrink: 0;
   container-type: inline-size;
   container-name: detail-header;
@@ -840,8 +839,6 @@ const sortedRecords = computed(() => {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-top: 6px;
-  border-top: 1px solid var(--uxp-host-border-color, #454545);
   margin-top: 6px;
   flex-shrink: 0;
 }
