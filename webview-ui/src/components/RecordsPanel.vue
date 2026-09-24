@@ -45,9 +45,51 @@ function togglePlay() {
     v.pause();
   }
 }
+
+/**
+ * 强制首帧渲染：loadeddata 后立即 play() → 立即 pause()，并把 currentTime 设回 0。
+ * - 解决某些 webview 上 <video preload="metadata"> 不会自动渲染首帧（黑屏）的问题
+ * - 行为是"播一帧就暂停"，用户感知为静态首帧
+ * - 切换记录 / 切换 url 时重置
+ */
+let firstFramePrimed = false;
+function primeFirstFrame() {
+  const v = mainVideoRef.value;
+  if (!v || firstFramePrimed) return;
+  // 浏览器策略限制：play() 必须有用户手势或 muted 才能直接播；
+  // 加 muted + play().then(pause) 是常用手法，且我们在模板里已 mute=true 之外，
+  // 此处再显式确认 muted
+  v.muted = true;
+  firstFramePrimed = true;
+  const p = v.play();
+  if (p && typeof (p as any).then === "function") {
+    (p as Promise<void>)
+      .then(() => {
+        // 立即暂停（拿到首帧解码即可），并把进度归零，画面停在首帧
+        try {
+          v.pause();
+          v.currentTime = 0;
+        } catch (_) {}
+        isPlaying.value = false;
+      })
+      .catch(() => {
+        // autoplay 被拒（极少见，因为 muted）：降级用 seeked 事件驱动
+        try {
+          v.currentTime = 0;
+        } catch (_) {}
+      });
+  } else {
+    // 旧 webview 没有返回 Promise 的 play()：直接 pause + seek
+    try {
+      v.pause();
+      v.currentTime = 0;
+    } catch (_) {}
+  }
+}
 // 切换记录时重置播放状态
 watch(selectedId, () => {
   isPlaying.value = false;
+  firstFramePrimed = false; // 新记录：允许重新触发"播一帧就暂停"
   const v = mainVideoRef.value;
   if (v && !v.paused) v.pause();
 });
@@ -542,8 +584,11 @@ function thumbModeOf(rec: GenerationRecord): ThumbMode {
             :src="videoUrlOf(selected)"
             class="main-video"
             preload="metadata"
+            muted
+            playsinline
             draggable="true"
             @error="onVideoError(selected)"
+            @loadeddata="primeFirstFrame"
             @click="togglePlay"
             @dragstart="onDragStart"
             @dragover="onDragOver"
