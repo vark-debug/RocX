@@ -307,11 +307,22 @@ export class MiniMaxAPI {
       });
     }
     const j = (await r.json()) as {
-      task?: { content?: { prompt?: string }; task_type?: string };
+      task?: { content?: { prompt?: string }; prompt?: string };
       request_id?: string;
       base_resp?: { status_code?: number; status_msg?: string };
     };
-    const optimized = j.task?.content?.prompt;
+    // 调试日志：把整段响应 dump 到 console，方便定位实际字段位置
+    console.log(
+      "%c[MiniMax optimizePrompt RESPONSE]",
+      "color:#9b59b6;font-weight:bold",
+      JSON.stringify(j, null, 2),
+    );
+    // 兼容两种官方返回结构：
+    //  - 同步 IR 接口：{ task: { content: { prompt: "..." }, ... } }
+    //  - 部分同步响应：{ task: { prompt: "..." }, ... }
+    const optimized =
+      j.task?.content?.prompt ||
+      j.task?.prompt;
     if (!optimized) {
       throw new MiniMaxError("MiniMax 提示词优化响应缺少 task.content.prompt", {
         errorType: "missing_optimized_prompt",
