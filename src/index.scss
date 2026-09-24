@@ -1,0 +1,50 @@
+@use "./variables.scss" as *;
+html,
+body {
+  height: 100vh;
+  // background-color: #000;
+  background-color: var(--uxp-host-background-color);
+  // background-color: var(---uxp-host-border-color);
+  // background-color: var(--uxp-host-border-color) !important;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  > * {
+    margin-top: 1rem;
+  }
+}
+.code {
+  font-family: "Courier New", monospace;
+  margin-left: 0.25rem;
+  margin-right: 0.25rem;
+}
+button {
+  background-color: transparent;
+  outline: none;
+  border: none;
+  padding: 0.6em 1.2em;
+}
+button:hover {
+  border: none;
+}
+p {
+  font-size: 1rem;
+}
+.app {
+  text-align: center;
+}
+
+
+
+.webview-ui {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  border: none;
+}

@@ -1,0 +1,21 @@
+html,
+body {
+  background-color: var(--uxp-host-background-color, #2b2b2b);
+  color: var(--uxp-host-text-color, #fff);
+  font: 12px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+#app {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
