@@ -46,50 +46,9 @@ function togglePlay() {
   }
 }
 
-/**
- * 强制首帧渲染：通过 currentTime 微调触发 seeked 事件，让 video 元素真正把首帧绘制到画面上。
- * - 不用 play() → 不会触发 @play 中间状态（避免切记录时偶发性自动播放）
- * - 不用 pause() → 不会跨越记录去修改旧 video 的状态
- * - loadedmetadata 后 currentTime 已经默认在 0，但某些 webview 不会渲染；
- *   把 currentTime 设到 0.001 强制触发 seeked 即可拿到首帧画面
- * - 用 module-level 代号 primeSeq 防止旧记录残留的 seeked 回调污染新记录
- */
-let firstFramePrimed = false;
-let primeSeq = 0;
-function primeFirstFrame() {
-  const v = mainVideoRef.value;
-  if (!v || firstFramePrimed) return;
-  // 当前已处于播放态 → 用户主动在播，不要做任何 prime
-  if (isPlaying.value) {
-    firstFramePrimed = true;
-    return;
-  }
-  firstFramePrimed = true;
-  // 确保 video 处于 paused 状态（template 已经没显式 paused，要保护性 set 一下）
-  try {
-    if (!v.paused) v.pause();
-  } catch (_) {}
-  // 代号：切记录会递增，旧回调到来时直接忽略
-  const mySeq = ++primeSeq;
-  const onSeeked = () => {
-    if (mySeq !== primeSeq) return; // 旧记录残留的回调，丢弃
-    v.removeEventListener("seeked", onSeeked);
-    // 不再做任何 video 操作；用户后续点 play 由 togglePlay 自己负责
-  };
-  v.addEventListener("seeked", onSeeked, { once: true });
-  // 触发 seek：用 0.001 微偏移让 webview 真正 seek 到首帧（currentTime=0 在某些实现下不触发 seeked）
-  try {
-    v.currentTime = 0.001;
-  } catch (_) {
-    // 极端兜底：设不到就保持原状
-    v.removeEventListener("seeked", onSeeked);
-  }
-}
 // 切换记录时重置播放状态
 watch(selectedId, () => {
   isPlaying.value = false;
-  firstFramePrimed = false; // 新记录：允许重新触发首帧 seek
-  primeSeq++; // 让旧记录残留的 seeked 回调失效
   const v = mainVideoRef.value;
   if (v && !v.paused) v.pause();
 });
@@ -308,6 +267,7 @@ function thumbModeOf(rec: GenerationRecord): "image" | "video" | "placeholder" {
  * - 顺序：先 await loadThumbUrl(rec) 等 url 就绪（确保 cache 有值），
  *   再调 getCanvasThumbUrl 拿真实 file:// URL，避免用空字符串触发永久失败
  * - 串行处理：避免一次创建 50 个隐藏 video 元素把 webview 卡死
+ * - 当前选中的记录同时抽大预览帧（mainFrameCache），叠在 <video> 上方避免黑屏
  */
 async function triggerCanvasThumbs() {
   for (const r of props.records) {
@@ -315,9 +275,7 @@ async function triggerCanvasThumbs() {
     if (canvasThumbFailed.value.has(r.id)) continue;
     if (canvasThumbPending.value.has(r.id)) continue;
     try {
-      // 先把 thumbUrlCache 加载好（fire-and-forget，但 await 让其完成）
       await loadThumbUrl(r);
-      // 如果是当前选中的记录，顺便加载 videoUrlCache
       if (r.id === selectedId.value) {
         await loadVideoUrl(r);
       }
@@ -326,7 +284,49 @@ async function triggerCanvasThumbs() {
       // 忽略单个失败
     }
   }
+  // 给当前选中记录额外抽一帧"大预览帧"（叠在 video 上方避免黑屏）
+  await generateMainFrame();
 }
+
+/**
+ * 大预览帧：复用 canvas 抽帧，叠在 <video> 上方避免 loadeddata/seeked 黑屏
+ * - record 切换时清缓存、重新抽
+ * - 失败 / 抽帧中：<img> 不显示（仍显示 video，可能黑屏）
+ * - 播放中（isPlaying）：不显示 <img>（视频在播，让 video 元素显示）
+ */
+const mainFrameBlob = ref<string | null>(null);
+let mainFrameSeq = 0;
+async function generateMainFrame() {
+  const rec = selected.value;
+  if (!rec || !rec.workFile) {
+    mainFrameBlob.value = null;
+    return;
+  }
+  if (rec.status !== "generated" && rec.status !== "imported") {
+    mainFrameBlob.value = null;
+    return;
+  }
+  const mySeq = ++mainFrameSeq;
+  try {
+    let vUrl = videoUrlOf(rec);
+    if (!vUrl) vUrl = await resolveUrl(rec);
+    if (mySeq !== mainFrameSeq) return; // 切记录了，丢弃
+    if (!vUrl) {
+      mainFrameBlob.value = null;
+      return;
+    }
+    const blobUrl = await extractFirstFrame(rec.id, vUrl);
+    if (mySeq !== mainFrameSeq) return;
+    mainFrameBlob.value = blobUrl;
+  } catch (_) {
+    if (mySeq === mainFrameSeq) mainFrameBlob.value = null;
+  }
+}
+
+// 切换记录时清掉 mainFrameBlob（避免切到新记录还显示旧帧）
+watch(selectedId, () => {
+  mainFrameBlob.value = null;
+});
 
 /** 拿单个 record 的可播放 URL（file:// 优先） */
 async function resolveUrl(rec: GenerationRecord): Promise<string> {
@@ -711,6 +711,14 @@ const sortedRecords = computed(() => {
       <!-- 主预览 / 失败信息 -->
       <div class="preview-area">
         <div class="main-video-wrap">
+          <!-- 大视频预览首帧遮罩：canvas 抽帧结果叠在 video 上方，避免 loadeddata 黑屏 -->
+          <img
+            v-if="mainFrameBlob && !isPlaying"
+            :src="mainFrameBlob"
+            class="main-frame-img"
+            draggable="false"
+            @click="togglePlay"
+          />
           <video
             v-if="selected.workFile && videoUrlOf(selected)"
             ref="mainVideoRef"
@@ -721,7 +729,6 @@ const sortedRecords = computed(() => {
             playsinline
             draggable="true"
             @error="onVideoError(selected)"
-            @loadeddata="primeFirstFrame"
             @click="togglePlay"
             @dragstart="onDragStart"
             @dragover="onDragOver"
@@ -1036,6 +1043,26 @@ const sortedRecords = computed(() => {
   border-radius: 4px;
   display: block;
   cursor: pointer;
+}
+
+/* 大视频预览首帧遮罩：叠在 video 上方，避免 loadeddata/seeked 黑屏
+ * - 与 main-video 同尺寸（max-width:100% / max-height:100% / object-fit:contain）
+ * - 绝对定位铺满 main-video-wrap，与 video 在视觉上重合
+ * - 播放中（isPlaying）会自动被 v-if 移除，露出 video 元素
+ */
+.main-frame-img {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  background: #000;
+  border-radius: 4px;
+  display: block;
+  cursor: pointer;
+  z-index: 2;
+  pointer-events: auto;
 }
 
 .play-overlay {
