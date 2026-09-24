@@ -15,6 +15,7 @@ const emit = defineEmits<{
   delete: [string];
   retry: [GenerationRecord];
   "use-as-reference": [GenerationRecord];
+  upgrade: [GenerationRecord];
 }>();
 
 const selectedId = ref<string | null>(props.initialSelectedId || props.records[0]?.id || null);
@@ -294,6 +295,26 @@ function retrySelected() {
 function deleteSelected() {
   if (selected.value) emit("delete", selected.value.id);
 }
+
+/** 是否允许对此记录发起"像素提升到 2K"：
+ *  - 模型必须是 H3（官方仅 H3 支持 video_regeneration）
+ *  - 当前分辨率必须是 768P（已是 2K 不需要升级；480P 仅 H3-Max 支持而 H3-Max 不支持升级）
+ *  - 状态必须是已生成 / 已导入（未生成没有源视频；生成中 / 失败也不允许）
+ *  - 源任务必须已有 taskId
+ */
+const canUpgradeTo2K = computed(() => {
+  const r = selected.value;
+  if (!r) return false;
+  if (r.status !== "generated" && r.status !== "imported") return false;
+  if (r.params.model !== "MiniMax-H3") return false;
+  if (r.params.resolution !== "768P") return false;
+  if (!r.taskId) return false;
+  return true;
+});
+
+function upgradeSelected() {
+  if (selected.value) emit("upgrade", selected.value);
+}
 function useAsReference(rec: GenerationRecord) {
   emit("use-as-reference", rec);
 }
@@ -388,6 +409,11 @@ const sortedRecords = computed(() => {
       <!-- 顶部：参数摘要 + 提示词 + 状态 + 操作（一行；窄屏时隐藏提示词） -->
       <header class="detail-header">
         <div class="meta-line">
+          <span
+            v-if="selected.upgradedFromResolution"
+            class="meta-badge upgrade-badge"
+            :title="`由 ${selected.upgradedFromResolution} 升级而来`"
+          >⬆ 升级</span>
           <span class="meta-model">{{ selected.params.model }}</span>
           <span class="meta-sep">·</span>
           <span class="meta-param">{{ selected.params.ratio }}</span>
@@ -478,6 +504,12 @@ const sortedRecords = computed(() => {
           @click="importToProjectSelected"
           title="仅导入到 PR Project 面板，不插入时间线"
         >导入到工程</button>
+        <button
+          v-if="canUpgradeTo2K"
+          class="action-btn upgrade-btn"
+          @click="upgradeSelected"
+          title="调用 video_regeneration 把这条 768P 视频提升到 2K（H3 专用）"
+        >⬆ 升级到 2K</button>
         <button
           class="action-btn"
           @click="retrySelected"
@@ -623,6 +655,20 @@ const sortedRecords = computed(() => {
 .meta-model {
   font-weight: 600;
   color: var(--uxp-host-text-color, #fff);
+}
+.meta-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+.upgrade-badge {
+  background: rgba(255, 165, 0, 0.18);
+  color: #ffa500;
+  border: 1px solid rgba(255, 165, 0, 0.4);
 }
 .meta-sep {
   opacity: 0.4;
@@ -863,6 +909,13 @@ const sortedRecords = computed(() => {
   &.primary {
     background: var(--uxp-host-link-text-color, #4b9cf5);
     color: #fff;
+  }
+  &.upgrade-btn {
+    background: rgba(255, 165, 0, 0.18);
+    color: #ffa500;
+    &:hover:not(:disabled) {
+      background: rgba(255, 165, 0, 0.32);
+    }
   }
   &.danger {
     background: rgba(217, 83, 79, 0.2);

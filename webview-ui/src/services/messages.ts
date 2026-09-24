@@ -54,6 +54,14 @@ export interface GenerationRecord {
   submittedAt?: string;
   /** 最后一次轮询时间戳 */
   lastPolledAt?: string;
+  /**
+   * 像素提升链路：
+   * - parentTaskId：本记录由哪条 taskId 升级而来（即 source_task_id）
+   * - upgradedFromResolution：升级前的分辨率（如 '768P'），升级后通常为 '2K'
+   * 用于把"原 768P 任务"和"升级出来的 2K 任务"关联起来，避免重复升级 / 重复扣费
+   */
+  parentTaskId?: string;
+  upgradedFromResolution?: MiniMaxResolution;
 }
 
 export interface ProjectRecords {

@@ -6,13 +6,16 @@
 import type {
   MiniMaxCreateRequest,
   MiniMaxCreateResponse,
+  MiniMaxModel,
   MiniMaxQueryResponse,
+  MiniMaxResolution,
   ReferenceItem,
   ReferenceType,
 } from "./messages";
 
 const CREATE_URL = "https://api.minimax.cn/v2/video_generation";
 const QUERY_BASE = "https://api.minimax.cn/v2/query/video_generation";
+const REGENERATE_URL = "https://api.minimax.cn/v2/video_regeneration";
 
 export class MiniMaxAPI {
   constructor(private apiKey: string) {}
@@ -162,6 +165,66 @@ export class MiniMaxAPI {
     if (j.task) return j.task;
     // fallback：扁平（兼容可能的变体）
     return j as unknown as MiniMaxQueryResponse;
+  }
+
+  /**
+   * 像素提升（video_regeneration）
+   * - 官方接口：POST https://api.minimax.cn/v2/video_regeneration
+   * - body: { model: 'MiniMax-H3', source_task_id: string, resolution: '2K' }
+   * - 复用 createVideo 的响应解析与错误处理逻辑（task_id + MiniMaxError）
+   */
+  async regenerateVideo(args: {
+    sourceTaskId: string;
+    resolution: MiniMaxResolution;
+    /** 默认为 'MiniMax-H3'（官方仅 H3 支持） */
+    model?: MiniMaxModel;
+  }): Promise<MiniMaxCreateResponse> {
+    const model = args.model || "MiniMax-H3";
+    const body = {
+      model,
+      source_task_id: args.sourceTaskId,
+      resolution: args.resolution,
+    };
+    const bodyString = JSON.stringify(body, null, 2);
+    console.log(
+      "%c[MiniMax regenerateVideo]",
+      "color:#ffa500;font-weight:bold",
+      "\nURL:", REGENERATE_URL,
+      "\nHeaders:", JSON.stringify(this.headers(), null, 2),
+      "\nBody:", bodyString,
+    );
+    let r: Response;
+    try {
+      r = await fetch(REGENERATE_URL, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      });
+    } catch (e: any) {
+      throw new MiniMaxError("网络错误: " + String(e?.message || e), {
+        httpStatus: 0,
+        errorType: "network_error",
+      });
+    }
+    if (!r.ok) {
+      const t = await r.text();
+      const parsed = parseMiniMaxError(t);
+      const msg = friendlyErrorMessage(parsed, r.status);
+      throw new MiniMaxError(msg, {
+        httpStatus: r.status,
+        errorType: parsed?.type || "http_error",
+        requestId: parsed?.requestId,
+      });
+    }
+    const j = (await r.json()) as MiniMaxCreateResponse & {
+      base_resp?: { status_code?: number; status_msg?: string };
+    };
+    if (!j.task_id) {
+      throw new MiniMaxError("MiniMax 像素提升响应缺少 task_id", {
+        errorType: "missing_task_id",
+      });
+    }
+    return { task_id: j.task_id };
   }
 }
 

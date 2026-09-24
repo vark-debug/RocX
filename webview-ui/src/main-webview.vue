@@ -531,6 +531,90 @@ async function deleteRecord(id: string) {
   records.value = records.value.filter((r) => r.id !== id);
 }
 
+/**
+ * 像素提升：把已生成的 H3 768P 视频提交到 video_regeneration 升级为 2K
+ * - 限制：仅 H3 模型 + 768P 可升级（H3-Max 不支持 / 2K 已为最高档）
+ * - 实现：创建一条新 record（保留原 768P 不动），记录 parentTaskId + upgradedFromResolution
+ * - 复用 resumePolling，等下载完成后再让用户选择导入到工程
+ */
+async function upgradeTo2K(rec: GenerationRecord) {
+  if (!apiKey.value) {
+    showToast("请先在设置里填写 API Key");
+    return;
+  }
+  if (!rec.taskId) {
+    showToast("原记录缺少 task_id，无法升级");
+    return;
+  }
+  if (rec.status !== "generated" && rec.status !== "imported") {
+    showToast("仅对已生成 / 已导入的视频可以升级");
+    return;
+  }
+  if (rec.params.model !== "MiniMax-H3") {
+    showToast("仅 H3 模型支持像素提升");
+    return;
+  }
+  if (rec.params.resolution !== "768P") {
+    showToast("仅 768P 分辨率可升级到 2K");
+    return;
+  }
+  // 防重复：已经升级过（按 parentTaskId 查）
+  const dup = records.value.find(
+    (r) => r.parentTaskId === rec.taskId && r.status !== "failed",
+  );
+  if (dup) {
+    showToast("该视频已存在升级任务，正在记录列表中");
+    selectedRecordId.value = dup.id;
+    return;
+  }
+
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const upgradeRec: GenerationRecord = {
+    id,
+    createdAt: now,
+    prompt: rec.prompt,
+    params: {
+      model: "MiniMax-H3",
+      ratio: rec.params.ratio,
+      duration: rec.params.duration,
+      resolution: "2K",
+    },
+    references: [...rec.references],
+    status: "pending",
+    submittedAt: now,
+    parentTaskId: rec.taskId,
+    upgradedFromResolution: "768P",
+  };
+  records.value.unshift(upgradeRec);
+
+  try {
+    const mini = new MiniMaxAPI(apiKey.value);
+    const { task_id } = await mini.regenerateVideo({
+      sourceTaskId: rec.taskId,
+      resolution: "2K",
+    });
+    const idx = records.value.findIndex((r) => r.id === id);
+    if (idx >= 0) {
+      records.value[idx] = {
+        ...records.value[idx],
+        taskId: task_id,
+        status: "generating",
+      };
+    }
+    resumePolling({ ...upgradeRec, taskId: task_id, status: "generating" });
+  } catch (e: any) {
+    const idx = records.value.findIndex((r) => r.id === id);
+    if (idx >= 0) {
+      records.value[idx] = {
+        ...records.value[idx],
+        status: "failed",
+        error: toRecordError(e),
+      };
+    }
+  }
+}
+
 async function retryRecord(rec: GenerationRecord) {
   if (!apiKey.value) return;
   const idx = records.value.findIndex((r) => r.id === rec.id);
@@ -654,6 +738,7 @@ function onDryRunChange(v: boolean) {
       @import-to-project="importToProject"
       @retry="retryRecord"
       @use-as-reference="useAsReference"
+      @upgrade="upgradeTo2K"
     />
 
     <!-- 底部状态条 -->
