@@ -230,21 +230,21 @@ export class MiniMaxAPI {
   }
 
   /**
-   * 提示词优化（h3_context_ir）
+   * 提交 H3 提示词优化任务（h3_context_ir）
    * - 官方接口：POST https://api.minimax.cn/v2/h3_context_ir
-   * - body 结构与 video_generation 相同（content 数组 + duration/ratio），
-   *   但不支持 resolution，且本次只关心同步返回的 content.prompt
-   * - 该接口是同步返回（直接拿到优化后的 prompt 字符串），无需轮询
-   * - 官方示例里 references 同时支持 mm_file:// 与 https URL
+   * - 该接口是**异步任务**：POST 响应只返回 `{ task_id }`，
+   *   需要再调用 queryTask 轮询，succeeded 后从 `task.content.prompt` 取优化后提示词
+   * - 文生视频（content 仅含 text）时 ratio 必填且不能为 adaptive；
+   *   含 references 时 ratio 可选默认 adaptive
    */
-  async optimizePrompt(args: {
+  async submitOptimizePrompt(args: {
     prompt: string;
     duration: number;
     ratio: MiniMaxRatio;
     references: ReferenceItem[];
     /** 强制固定 H3（官方仅 H3 支持该 IR 任务） */
     model?: MiniMaxModel;
-  }): Promise<string> {
+  }): Promise<MiniMaxCreateResponse> {
     const model = args.model || "MiniMax-H3";
 
     // 构造 content 数组
@@ -276,7 +276,7 @@ export class MiniMaxAPI {
       );
     }
     console.log(
-      "%c[MiniMax optimizePrompt]",
+      "%c[MiniMax submitOptimizePrompt]",
       "color:#9b59b6;font-weight:bold",
       "\nURL:", H3_CONTEXT_IR_URL,
       "\nHeaders:", JSON.stringify(this.headers(), null, 2),
@@ -307,29 +307,22 @@ export class MiniMaxAPI {
       });
     }
     const j = (await r.json()) as {
-      task?: { content?: { prompt?: string }; prompt?: string };
+      task_id?: string;
       request_id?: string;
       base_resp?: { status_code?: number; status_msg?: string };
     };
-    // 调试日志：把整段响应 dump 到 console，方便定位实际字段位置
     console.log(
-      "%c[MiniMax optimizePrompt RESPONSE]",
+      "%c[MiniMax submitOptimizePrompt RESPONSE]",
       "color:#9b59b6;font-weight:bold",
       JSON.stringify(j, null, 2),
     );
-    // 兼容两种官方返回结构：
-    //  - 同步 IR 接口：{ task: { content: { prompt: "..." }, ... } }
-    //  - 部分同步响应：{ task: { prompt: "..." }, ... }
-    const optimized =
-      j.task?.content?.prompt ||
-      j.task?.prompt;
-    if (!optimized) {
-      throw new MiniMaxError("MiniMax 提示词优化响应缺少 task.content.prompt", {
-        errorType: "missing_optimized_prompt",
+    if (!j.task_id) {
+      throw new MiniMaxError("MiniMax 提示词优化响应缺少 task_id", {
+        errorType: "missing_task_id",
         requestId: j.request_id,
       });
     }
-    return optimized;
+    return { task_id: j.task_id };
   }
 }
 

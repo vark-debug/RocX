@@ -122,7 +122,8 @@ export interface MiniMaxQueryResponse {
   task_id?: string;
   model?: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  content?: { url?: string };
+  /** 视频生成任务：content.url = 产物 CDN 地址；h3_context_ir 任务：content.prompt = 优化后提示词 */
+  content?: { url?: string; prompt?: string };
   error?: { message: string; http_code?: number };
   usage?: { total_seconds?: number };
   resolution?: string;

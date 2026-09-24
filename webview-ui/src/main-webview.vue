@@ -678,10 +678,12 @@ async function retryRecord(rec: GenerationRecord) {
 
 /**
  * 提示词优化（h3_context_ir）
- * - 官方接口同步返回 content.prompt 字符串
+ * - 官方接口是异步任务：POST 返回 { task_id }，需 queryTask 轮询，
+ *   succeeded 后从 task.content.prompt 取优化后字符串
  * - 限制：仅 H3 模型；prompt 非空；references 中若仍有未上传的 fileId 会被忽略
  * - 行为：成功时直接覆盖填入 prompt 输入框（不创建 record，不计费入库）
  * - ratio：与 createVideo 一致，无 references 时 'adaptive' 不合法，自动回退到 '16:9'
+ * - 复用现有 usePolling，与视频生成的轮询代码路径同源（共享 polling_ 单例）
  */
 async function optimizePrompt() {
   if (!apiKey.value) {
@@ -697,6 +699,11 @@ async function optimizePrompt() {
     return;
   }
   if (optimizingPrompt.value) return;
+  // 与视频生成共用 polling_ 单例：若已有视频生成在轮询，拒绝并发提交
+  if (pollingActive.value) {
+    showToast("有视频生成正在轮询，请稍候再试");
+    return;
+  }
 
   // 仅取已上传成功的 references（有 fileId 的）
   const validRefs = references.value.filter((r) => !!r.fileId);
@@ -705,20 +712,88 @@ async function optimizePrompt() {
     validRefs.length === 0 && ratio.value === "adaptive" ? "16:9" : ratio.value;
 
   optimizingPrompt.value = true;
+  // 优化请求是异步任务（h3_context_ir）：用一个临时 record 占位，
+  // 让 polling_ 的状态机正常运转；完成后把 prompt.content 写回 UI。
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const optimizeRec: GenerationRecord = {
+    id,
+    createdAt: now,
+    prompt: prompt.value,
+    params: {
+      model: "MiniMax-H3",
+      ratio: ratioArg,
+      duration: duration.value,
+      resolution: "768P",
+    },
+    references: [...validRefs],
+    status: "pending",
+    submittedAt: now,
+  };
+
   try {
     const mini = new MiniMaxAPI(apiKey.value);
-    const optimized = await mini.optimizePrompt({
+    const { task_id } = await mini.submitOptimizePrompt({
       prompt: prompt.value,
       duration: duration.value,
       ratio: ratioArg,
       references: validRefs,
     });
-    prompt.value = optimized;
-    showToast("提示词已优化");
+    // 占位 record 写入 records，便于统一走 polling 流；status 始终为 'generating'
+    records.value.unshift({
+      ...optimizeRec,
+      taskId: task_id,
+      status: "generating",
+    });
+    // 设置 generating 标志 + 启动轮询（不下载产物，只取 prompt）
+    generating.value = records.value.find((r) => r.id === id) || null;
+    pollingActive.value = true;
+    polling_.start({
+      taskId: task_id,
+      apiKey: apiKey.value,
+      intervalMs: 3000, // IR 任务通常很快（秒级），3s 轮询体验更好
+      onUpdate: (resp) => {
+        const idx = records.value.findIndex((r) => r.id === id);
+        if (idx < 0) return;
+        records.value[idx] = {
+          ...records.value[idx],
+          lastPolledAt: new Date().toISOString(),
+        };
+      },
+      onTerminal: (resp, err) => {
+        pollingActive.value = false;
+        const idx = records.value.findIndex((r) => r.id === id);
+        if (idx >= 0) {
+          // 删除占位 record（用户不需要在历史里看到一条"优化任务"）
+          records.value.splice(idx, 1);
+        }
+        generating.value = null;
+        if (err) {
+          console.error("[webview] optimizePrompt poll error:", err);
+          showToast(`优化失败: ${err.message || err}`);
+          return;
+        }
+        if (!resp) {
+          showToast("优化失败：查询无响应");
+          return;
+        }
+        if (resp.status === "succeeded") {
+          const optimized = resp.content?.prompt;
+          if (optimized) {
+            prompt.value = optimized;
+            showToast("提示词已优化");
+          } else {
+            showToast("优化成功但响应缺 content.prompt");
+          }
+        } else if (resp.status === "failed" || resp.status === "cancelled") {
+          showToast(`优化失败: ${resp.error?.message || resp.status}`);
+        }
+        optimizingPrompt.value = false;
+      },
+    });
   } catch (e: any) {
     console.error("[webview] optimizePrompt failed:", e);
     showToast(`优化失败: ${e?.message || e}`);
-  } finally {
     optimizingPrompt.value = false;
   }
 }
