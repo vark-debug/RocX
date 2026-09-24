@@ -49,7 +49,12 @@ function base64ToBytes(b64: string): Uint8Array {
 /**
  * 把 mp4 文件抽首帧并写到 plugin-data Thumbs 目录
  * - 返回 { ok, thumbPath }，失败 ok=false（不抛错）
- * - <video> 用 load() + loadeddata + currentTime=0 + seeked 等首帧 ready
+ * - 抽帧策略：
+ *   1) video 元素 attached + 320×180 显示尺寸（保证解码器真的 decode）
+ *   2) 等 canplay（HAVE_FUTURE_DATA，buffer 够首帧渲染）
+ *   3) seek 到 0.001 强制触发 seeked（部分 webview currentTime=0 不触发 seeked）
+ *   4) 等 seeked 后 drawImage（双保险：再 seek 到 0 让画面是首帧而不是中间帧）
+ * - 失败原因诊断：每步加 console.log，方便排查 stuck 在哪
  * - 抽帧失败 / 文件不存在 / 写入失败：都返回 ok=false，主流程不受影响
  */
 async function extractFirstFrameToJpeg(
@@ -58,11 +63,12 @@ async function extractFirstFrameToJpeg(
 ): Promise<{ ok: boolean; error?: string }> {
   return await new Promise((resolve) => {
     let settled = false;
+    let phase = "init";
     const done = (r: { ok: boolean; error?: string }) => {
       if (settled) return;
       settled = true;
+      console.log(`[thumbs] ${thumbPath} done phase=${phase}`, r);
       try {
-        // 清理：source 清空 + load() 释放解码器
         if (video.src && videoSrc) {
           try { video.removeAttribute("src"); video.load(); } catch (_) {}
         }
@@ -74,51 +80,38 @@ async function extractFirstFrameToJpeg(
     video.muted = true;
     video.preload = "auto";
     video.crossOrigin = "anonymous";
-    // 必须加到 DOM 才能触发解码（部分 UXP 版本 detached video 不 decode）
+    video.playsInline = true;
+    // 关键：尺寸必须给到让解码器认为值得解码（之前 1×1 太小，
+    // 某些 webview 会跳过首帧 decode → loadeddata 触发但 buffer 没就绪 → seeked 等不到）
     video.style.position = "fixed";
     video.style.left = "-99999px";
     video.style.top = "0";
-    video.style.width = "1px";
-    video.style.height = "1px";
+    video.style.width = "320px";
+    video.style.height = "180px";
     video.style.opacity = "0";
     video.style.pointerEvents = "none";
+    video.style.display = "block";
     document.body.appendChild(video);
 
     const cleanup = () => {
       try { video.remove(); } catch (_) {}
     };
 
-    // 超时兜底（视频解码失败 / 文件坏）
+    // 大文件（2K 高码率 mp4 30~50MB）下载缓冲 + 解码可能慢；放宽到 25s
+    const TIMEOUT_MS = 25000;
     const timer = setTimeout(() => {
       cleanup();
-      done({ ok: false, error: "video 抽帧超时" });
-    }, 8000);
+      done({ ok: false, error: `video 抽帧超时（卡在 ${phase}, readyState=${video.readyState}, networkState=${video.networkState}）` });
+    }, TIMEOUT_MS);
 
-    const onLoaded = () => {
-      // 等待视频尺寸 ready
-      if (!video.videoWidth || !video.videoHeight) {
-        // 部分 UXP 版本 loadeddata 时 videoWidth 还未就绪，等 loadedmetadata
-        return;
-      }
-      try {
-        // seek 到 0（已是 0 也要 seek 一次以触发解码）
-        video.currentTime = 0;
-      } catch (e: any) {
-        clearTimeout(timer);
-        cleanup();
-        done({ ok: false, error: "seek 失败: " + String(e?.message || e) });
-        return;
-      }
-    };
-
-    const onSeeked = () => {
-      clearTimeout(timer);
+    const tryDraw = () => {
+      phase = "draw";
       try {
         const vw = video.videoWidth;
         const vh = video.videoHeight;
         if (!vw || !vh) {
           cleanup();
-          done({ ok: false, error: "video 尺寸无效" });
+          done({ ok: false, error: "video 尺寸无效 vw=" + vw + " vh=" + vh });
           return;
         }
         const ratio = THUMB_WIDTH / vw;
@@ -133,18 +126,15 @@ async function extractFirstFrameToJpeg(
           done({ ok: false, error: "canvas 2d 上下文不可用" });
           return;
         }
-        // 黑底（H.264 首帧偶发透明，避免白底闪烁）
         ctx.fillStyle = "#000";
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(video, 0, 0, w, h);
         const dataUrl = canvas.toDataURL("image/jpeg", THUMB_QUALITY);
         const b64 = dataUrl.replace(/^data:image\/jpeg;base64,/, "");
 
-        // 落盘
         const fs: any = uxp.storage.localFileSystem;
         (async () => {
           try {
-            // ensure Thumbs 目录
             const baseUrl = `plugin-data:/${WORK_DIR_NAME}`;
             let dir: any;
             try {
@@ -164,7 +154,6 @@ async function extractFirstFrameToJpeg(
                 return;
               }
             }
-            // 写文件
             const thumbName = thumbPath.split("/").pop() || "thumb.jpg";
             const bytes = base64ToBytes(b64);
             const entry = await fs.createEntryWithUrl(`${baseUrl}/${THUMBS_SUBDIR}/${thumbName}`, {
@@ -174,10 +163,8 @@ async function extractFirstFrameToJpeg(
             await entry.write(bytes, { format: uxp.storage.formats.binary });
             const written = entry.nativePath || (await fs.getNativePath(entry));
             cleanup();
-            done({ ok: true, error: undefined });
-            console.log("[thumbs] 写入缩略图:", written);
-            // thumbPath 通过返回值暴露给调用方
             (done as any).thumbPath = written;
+            done({ ok: true });
           } catch (e: any) {
             cleanup();
             done({ ok: false, error: "写入缩略图失败: " + String(e?.message || e) });
@@ -190,21 +177,89 @@ async function extractFirstFrameToJpeg(
       }
     };
 
+    const trySeek = () => {
+      phase = "seek";
+      try {
+        // 用 0.001 强制触发 seeked（currentTime=0 在部分 webview 不触发）
+        video.currentTime = 0.001;
+      } catch (e: any) {
+        clearTimeout(timer);
+        cleanup();
+        done({ ok: false, error: "seek 失败: " + String(e?.message || e) });
+      }
+    };
+
+    /**
+     * 检查 readyState：HAVE_METADATA=1 / HAVE_CURRENT_DATA=2 / HAVE_FUTURE_DATA=3 / HAVE_ENOUGH_DATA=4
+     * 需要至少 HAVE_CURRENT_DATA（首帧已可绘制）才 seek
+     */
+    const tryProceed = () => {
+      const rs = video.readyState;
+      console.log(`[thumbs] ${thumbPath} readyState=${rs} vw=${video.videoWidth} vh=${video.videoHeight} dur=${video.duration}`);
+      if (rs >= 2 && video.videoWidth && video.videoHeight) {
+        trySeek();
+      }
+      // 还没就绪：什么都不做，继续等 loadeddata / canplay
+    };
+
+    const onLoadedData = () => {
+      phase = "loadeddata";
+      tryProceed();
+    };
+    const onCanPlay = () => {
+      phase = "canplay";
+      tryProceed();
+    };
+    const onSeeked = () => {
+      phase = "seeked";
+      // 双保险：seeked 后再把 currentTime 设回 0，避免 0.001 偏移带来的画面不是首帧
+      try {
+        video.currentTime = 0;
+      } catch (_) {}
+      // 帧已绘制，再来一次 seeked（currentTime=0 → 0）也会触发，给它一个微 task 再 draw
+      requestAnimationFrame(() => {
+        // 检查 readyState >= 2（current frame 渲染了）
+        if (video.readyState >= 2) {
+          tryDraw();
+        } else {
+          // 还没渲染完成，再等一次 seeked
+          const onSeeked2 = () => {
+            phase = "seeked2";
+            tryDraw();
+          };
+          video.addEventListener("seeked", onSeeked2, { once: true });
+          // 兜底超时（如果 seeked 不触发）
+          setTimeout(() => {
+            if (!settled) {
+              console.warn(`[thumbs] ${thumbPath} 二次 seeked 超时，尝试强制 draw (readyState=${video.readyState})`);
+              if (video.readyState >= 2) tryDraw();
+              else cleanup(), done({ ok: false, error: "seeked2 超时" });
+            }
+          }, 5000);
+        }
+      });
+    };
     const onError = (e: any) => {
       clearTimeout(timer);
       cleanup();
-      done({ ok: false, error: "video load 错误: " + String((e as any)?.message || e) });
+      done({ ok: false, error: "video load 错误: " + String((e as any)?.message || e) + ` (code=${(e as any)?.target?.error?.code})` });
     };
 
-    video.addEventListener("loadedmetadata", onLoaded, { once: true });
-    video.addEventListener("loadeddata", () => {
-      // loadeddata 时 videoWidth/videoHeight 应该已就绪
-      if (video.videoWidth && video.videoHeight) {
-        onLoaded();
-      }
+    video.addEventListener("loadedmetadata", () => {
+      phase = "loadedmetadata";
+      console.log(`[thumbs] ${thumbPath} loadedmetadata vw=${video.videoWidth} vh=${video.videoHeight}`);
     }, { once: true });
+    video.addEventListener("loadeddata", onLoadedData, { once: true });
+    video.addEventListener("canplay", onCanPlay, { once: true });
     video.addEventListener("seeked", onSeeked, { once: true });
     video.addEventListener("error", onError, { once: true });
+    // 进度事件埋点（卡住时排查用）
+    video.addEventListener("stalled", () => {
+      console.warn(`[thumbs] ${thumbPath} stalled phase=${phase} readyState=${video.readyState}`);
+    });
+    video.addEventListener("waiting", () => {
+      console.warn(`[thumbs] ${thumbPath} waiting phase=${phase} readyState=${video.readyState}`);
+    });
 
     try {
       video.src = videoSrc;
