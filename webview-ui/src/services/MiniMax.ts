@@ -8,6 +8,7 @@ import type {
   MiniMaxCreateResponse,
   MiniMaxModel,
   MiniMaxQueryResponse,
+  MiniMaxRatio,
   MiniMaxResolution,
   ReferenceItem,
   ReferenceType,
@@ -16,6 +17,7 @@ import type {
 const CREATE_URL = "https://api.minimax.cn/v2/video_generation";
 const QUERY_BASE = "https://api.minimax.cn/v2/query/video_generation";
 const REGENERATE_URL = "https://api.minimax.cn/v2/video_regeneration";
+const H3_CONTEXT_IR_URL = "https://api.minimax.cn/v2/h3_context_ir";
 
 export class MiniMaxAPI {
   constructor(private apiKey: string) {}
@@ -225,6 +227,98 @@ export class MiniMaxAPI {
       });
     }
     return { task_id: j.task_id };
+  }
+
+  /**
+   * 提示词优化（h3_context_ir）
+   * - 官方接口：POST https://api.minimax.cn/v2/h3_context_ir
+   * - body 结构与 video_generation 相同（content 数组 + duration/ratio），
+   *   但不支持 resolution，且本次只关心同步返回的 content.prompt
+   * - 该接口是同步返回（直接拿到优化后的 prompt 字符串），无需轮询
+   * - 官方示例里 references 同时支持 mm_file:// 与 https URL
+   */
+  async optimizePrompt(args: {
+    prompt: string;
+    duration: number;
+    ratio: MiniMaxRatio;
+    references: ReferenceItem[];
+    /** 强制固定 H3（官方仅 H3 支持该 IR 任务） */
+    model?: MiniMaxModel;
+  }): Promise<string> {
+    const model = args.model || "MiniMax-H3";
+
+    // 构造 content 数组
+    const content: any[] = [{ type: "text", text: args.prompt }];
+    for (const ref of args.references) {
+      if (!ref.fileId) {
+        throw new Error("参考素材缺少 fileId，请先上传");
+      }
+      const wireType = refTypeToWireType(ref.type);
+      content.push({
+        type: wireType,
+        [wireType]: {
+          url: `mm_file://${ref.fileId}`,
+        },
+        role: ref.type,
+      });
+    }
+
+    const body: any = {
+      model,
+      content,
+      duration: args.duration,
+      ratio: args.ratio,
+    };
+    const bodyString = JSON.stringify(body, null, 2);
+    if (bodyString.includes("data:") && bodyString.includes("base64")) {
+      console.warn(
+        "[MiniMax] ⚠️ optimizePrompt body 包含 base64 data URL！请改用 mm_file://<file_id>",
+      );
+    }
+    console.log(
+      "%c[MiniMax optimizePrompt]",
+      "color:#9b59b6;font-weight:bold",
+      "\nURL:", H3_CONTEXT_IR_URL,
+      "\nHeaders:", JSON.stringify(this.headers(), null, 2),
+      "\nBody:", bodyString,
+    );
+
+    let r: Response;
+    try {
+      r = await fetch(H3_CONTEXT_IR_URL, {
+        method: "POST",
+        headers: this.headers(),
+        body: JSON.stringify(body),
+      });
+    } catch (e: any) {
+      throw new MiniMaxError("网络错误: " + String(e?.message || e), {
+        httpStatus: 0,
+        errorType: "network_error",
+      });
+    }
+    if (!r.ok) {
+      const t = await r.text();
+      const parsed = parseMiniMaxError(t);
+      const msg = friendlyErrorMessage(parsed, r.status);
+      throw new MiniMaxError(msg, {
+        httpStatus: r.status,
+        errorType: parsed?.type || "http_error",
+        requestId: parsed?.requestId,
+      });
+    }
+    const j = (await r.json()) as {
+      task?: { content?: { prompt?: string }; task_type?: string };
+      request_id?: string;
+      base_resp?: { status_code?: number; status_msg?: string };
+    };
+    const optimized = j.task?.content?.prompt;
+    if (!optimized) {
+      throw new MiniMaxError("MiniMax 提示词优化响应缺少 task.content.prompt", {
+        errorType: "missing_optimized_prompt",
+        requestId: j.request_id,
+      });
+    }
+    return optimized;
   }
 }
 

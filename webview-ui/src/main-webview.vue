@@ -66,6 +66,7 @@ const selectedRecordId = ref<string | null>(null);
 const generating = ref<GenerationRecord | null>(null);
 const pollingActive = ref(false);
 const settingsOpen = ref(false);
+const optimizingPrompt = ref(false);
 
 const constraints = computed<MiniMaxParamConstraints>(
   () => MINIMAX_PARAM_CONSTRAINTS[model.value],
@@ -675,6 +676,53 @@ async function retryRecord(rec: GenerationRecord) {
   if (promptEl) (promptEl as HTMLTextAreaElement)?.focus?.();
 }
 
+/**
+ * 提示词优化（h3_context_ir）
+ * - 官方接口同步返回 content.prompt 字符串
+ * - 限制：仅 H3 模型；prompt 非空；references 中若仍有未上传的 fileId 会被忽略
+ * - 行为：成功时直接覆盖填入 prompt 输入框（不创建 record，不计费入库）
+ * - ratio：与 createVideo 一致，无 references 时 'adaptive' 不合法，自动回退到 '16:9'
+ */
+async function optimizePrompt() {
+  if (!apiKey.value) {
+    showToast("请先在设置里填写 API Key");
+    return;
+  }
+  if (!prompt.value.trim()) {
+    showToast("请先填写提示词");
+    return;
+  }
+  if (model.value !== "MiniMax-H3") {
+    showToast("仅 H3 模型支持提示词优化");
+    return;
+  }
+  if (optimizingPrompt.value) return;
+
+  // 仅取已上传成功的 references（有 fileId 的）
+  const validRefs = references.value.filter((r) => !!r.fileId);
+  // 与 createVideo 保持一致：无 references 时 ratio=adaptive 不合法
+  const ratioArg: MiniMaxRatio =
+    validRefs.length === 0 && ratio.value === "adaptive" ? "16:9" : ratio.value;
+
+  optimizingPrompt.value = true;
+  try {
+    const mini = new MiniMaxAPI(apiKey.value);
+    const optimized = await mini.optimizePrompt({
+      prompt: prompt.value,
+      duration: duration.value,
+      ratio: ratioArg,
+      references: validRefs,
+    });
+    prompt.value = optimized;
+    showToast("提示词已优化");
+  } catch (e: any) {
+    console.error("[webview] optimizePrompt failed:", e);
+    showToast(`优化失败: ${e?.message || e}`);
+  } finally {
+    optimizingPrompt.value = false;
+  }
+}
+
 const generatedCount = computed(() => records.value.filter((r) => r.status === "generated").length);
 
 // ---------- 初始化 ----------
@@ -769,7 +817,9 @@ function onDryRunChange(v: boolean) {
         :polling="pollingActive"
         :has-api-key="!!apiKey"
         :has-project="!!projectInfo"
+        :optimizing="optimizingPrompt"
         @submit="submitGenerate"
+        @optimize="optimizePrompt"
       />
     </div>
     <div v-if="toastMsg" class="uxp-toast">{{ toastMsg }}</div>

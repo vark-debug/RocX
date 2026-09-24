@@ -19,6 +19,8 @@ const props = defineProps<{
   polling: boolean;
   hasApiKey: boolean;
   hasProject: boolean;
+  /** 提示词优化（h3_context_ir）正在请求中（用于按钮 loading 态） */
+  optimizing?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -28,6 +30,8 @@ const emit = defineEmits<{
   "update:duration": [number];
   "update:resolution": [MiniMaxResolution];
   submit: [];
+  /** 用户点击了右上角 ✨ 按钮，请求调用 h3_context_ir 优化 prompt */
+  optimize: [];
 }>();
 
 const modelPopoverOpen = ref(false);
@@ -68,16 +72,50 @@ const submitLabel = computed(() => {
 function onSubmitClick() {
   if (props.canSubmit) emit("submit");
 }
+
+/** ✨ 优化按钮可用条件：已配 Key + 当前模型是 H3 + prompt 非空 + 当前未在优化中 */
+const canOptimize = computed(() => {
+  if (props.optimizing) return false;
+  if (!props.hasApiKey) return false;
+  if (props.model !== "MiniMax-H3") return false;
+  return !!props.prompt.trim();
+});
+
+const optimizeTitle = computed(() => {
+  if (props.optimizing) return "优化中…";
+  if (!props.hasApiKey) return "请先在设置里配置 API Key";
+  if (props.model !== "MiniMax-H3") return "仅 H3 模型支持提示词优化";
+  if (!props.prompt.trim()) return "请先填写提示词";
+  return "用 MiniMax-H3 优化提示词（h3_context_ir）";
+});
+
+function onOptimizeClick() {
+  if (canOptimize.value) emit("optimize");
+}
 </script>
 
 <template>
   <section class="prompt-section">
-    <textarea
-      :value="prompt"
-      @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
-      placeholder="描述你想生成的视频..."
-      rows="2"
-    ></textarea>
+    <div class="prompt-textarea-wrap">
+      <textarea
+        :value="prompt"
+        @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
+        placeholder="描述你想生成的视频..."
+        rows="2"
+      ></textarea>
+      <!-- 右上角：✨ 调用 h3_context_ir 优化提示词 -->
+      <button
+        class="optimize-btn"
+        :class="{ disabled: !canOptimize, loading: optimizing }"
+        :disabled="!canOptimize"
+        :title="optimizeTitle"
+        type="button"
+        @click="onOptimizeClick"
+      >
+        <span v-if="!optimizing" class="optimize-icon">✨</span>
+        <span v-else class="optimize-spinner"></span>
+      </button>
+    </div>
     <div class="param-row">
       <!-- 模型选择按钮（独立 popover） -->
       <button
@@ -213,6 +251,65 @@ function onSubmitClick() {
       outline: none;
       border-color: var(--uxp-host-link-text-color, #4b9cf5);
     }
+  }
+}
+
+/* 提示词输入框 + 右上角优化按钮 */
+.prompt-textarea-wrap {
+  position: relative;
+  textarea {
+    /* 给右上角按钮让出空间，避免文字盖到 ✨ */
+    padding-right: 28px;
+  }
+}
+.optimize-btn {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  opacity: 0.85;
+  transition: opacity 0.15s, background 0.15s, transform 0.15s;
+  &:hover:not(.disabled):not(:disabled) {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.08);
+    transform: scale(1.05);
+  }
+  &.disabled,
+  &:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+  &.loading {
+    opacity: 1;
+    cursor: progress;
+  }
+}
+.optimize-icon {
+  display: inline-block;
+}
+.optimize-spinner {
+  width: 12px;
+  height: 12px;
+  border: 1.5px solid rgba(255, 255, 255, 0.25);
+  border-top-color: var(--uxp-host-link-text-color, #4b9cf5);
+  border-radius: 50%;
+  animation: optimize-spin 0.8s linear infinite;
+}
+@keyframes optimize-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 
