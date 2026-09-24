@@ -268,9 +268,15 @@ async function getCanvasThumbUrl(rec: GenerationRecord): Promise<string | null> 
   if (canvasThumbPending.value.has(rec.id)) return null;
   canvasThumbPending.value.add(rec.id);
   try {
-    // 复用 thumbUrlOf 拿到的 video URL（file:// 优先），没有就空
-    const vUrl = thumbUrlOf(rec);
+    // 关键：之前用 thumbUrlOf()（纯同步读缓存）拿 url，但 thumbUrlCache 是异步
+    // 填充的，triggerCanvasThumbs 立即执行时缓存还是空的 → 失败。
+    // 改成直接 await resolveUrl() 拿真实可用的 file:// URL（与 videoUrlOf 同源）
+    let vUrl = videoUrlOf(rec);
     if (!vUrl) {
+      vUrl = await resolveUrl(rec);
+    }
+    if (!vUrl) {
+      // resolveUrl 失败（文件不可访问 / file:// 被沙箱拒）→ 永久标记
       canvasThumbFailed.value.add(rec.id);
       return null;
     }
@@ -279,10 +285,10 @@ async function getCanvasThumbUrl(rec: GenerationRecord): Promise<string | null> 
       canvasThumbCache.value = { ...canvasThumbCache.value, [rec.id]: blobUrl };
       return blobUrl;
     }
-    canvasThumbFailed.value.add(rec.id);
+    // 抽帧失败：先不永久标记，让 records 变化 / watch 触发时重试
+    // （避免 video 还在 loading 时过早判定）
     return null;
   } catch (_) {
-    canvasThumbFailed.value.add(rec.id);
     return null;
   } finally {
     canvasThumbPending.value.delete(rec.id);
@@ -299,15 +305,26 @@ function thumbModeOf(rec: GenerationRecord): "image" | "video" | "placeholder" {
 
 /**
  * 触发 canvas 抽帧（在 mounted / records 变化 / 选中时）
- * - 仅对 thumbModeOf === 'video' 且未被永久失败的记录触发
- * - 抽帧是异步的，UI 先显示 <video> 缩略图，canvas 抽帧完成后响应式切到 <img>
+ * - 顺序：先 await loadThumbUrl(rec) 等 url 就绪（确保 cache 有值），
+ *   再调 getCanvasThumbUrl 拿真实 file:// URL，避免用空字符串触发永久失败
+ * - 串行处理：避免一次创建 50 个隐藏 video 元素把 webview 卡死
  */
-function triggerCanvasThumbs() {
+async function triggerCanvasThumbs() {
   for (const r of props.records) {
     if (canvasThumbCache.value[r.id]) continue;
     if (canvasThumbFailed.value.has(r.id)) continue;
     if (canvasThumbPending.value.has(r.id)) continue;
-    getCanvasThumbUrl(r);
+    try {
+      // 先把 thumbUrlCache 加载好（fire-and-forget，但 await 让其完成）
+      await loadThumbUrl(r);
+      // 如果是当前选中的记录，顺便加载 videoUrlCache
+      if (r.id === selectedId.value) {
+        await loadVideoUrl(r);
+      }
+      await getCanvasThumbUrl(r);
+    } catch (_) {
+      // 忽略单个失败
+    }
   }
 }
 
