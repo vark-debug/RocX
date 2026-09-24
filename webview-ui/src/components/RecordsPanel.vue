@@ -47,49 +47,49 @@ function togglePlay() {
 }
 
 /**
- * 强制首帧渲染：loadeddata 后立即 play() → 立即 pause()，并把 currentTime 设回 0。
- * - 解决某些 webview 上 <video preload="metadata"> 不会自动渲染首帧（黑屏）的问题
- * - 行为是"播一帧就暂停"，用户感知为静态首帧
- * - 切换记录 / 切换 url 时重置
+ * 强制首帧渲染：通过 currentTime 微调触发 seeked 事件，让 video 元素真正把首帧绘制到画面上。
+ * - 不用 play() → 不会触发 @play 中间状态（避免切记录时偶发性自动播放）
+ * - 不用 pause() → 不会跨越记录去修改旧 video 的状态
+ * - loadedmetadata 后 currentTime 已经默认在 0，但某些 webview 不会渲染；
+ *   把 currentTime 设到 0.001 强制触发 seeked 即可拿到首帧画面
+ * - 用 module-level 代号 primeSeq 防止旧记录残留的 seeked 回调污染新记录
  */
 let firstFramePrimed = false;
+let primeSeq = 0;
 function primeFirstFrame() {
   const v = mainVideoRef.value;
   if (!v || firstFramePrimed) return;
-  // 浏览器策略限制：play() 必须有用户手势或 muted 才能直接播；
-  // 加 muted + play().then(pause) 是常用手法，且我们在模板里已 mute=true 之外，
-  // 此处再显式确认 muted
-  v.muted = true;
+  // 当前已处于播放态 → 用户主动在播，不要做任何 prime
+  if (isPlaying.value) {
+    firstFramePrimed = true;
+    return;
+  }
   firstFramePrimed = true;
-  const p = v.play();
-  if (p && typeof (p as any).then === "function") {
-    (p as Promise<void>)
-      .then(() => {
-        // 立即暂停（拿到首帧解码即可），并把进度归零，画面停在首帧
-        try {
-          v.pause();
-          v.currentTime = 0;
-        } catch (_) {}
-        isPlaying.value = false;
-      })
-      .catch(() => {
-        // autoplay 被拒（极少见，因为 muted）：降级用 seeked 事件驱动
-        try {
-          v.currentTime = 0;
-        } catch (_) {}
-      });
-  } else {
-    // 旧 webview 没有返回 Promise 的 play()：直接 pause + seek
-    try {
-      v.pause();
-      v.currentTime = 0;
-    } catch (_) {}
+  // 确保 video 处于 paused 状态（template 已经没显式 paused，要保护性 set 一下）
+  try {
+    if (!v.paused) v.pause();
+  } catch (_) {}
+  // 代号：切记录会递增，旧回调到来时直接忽略
+  const mySeq = ++primeSeq;
+  const onSeeked = () => {
+    if (mySeq !== primeSeq) return; // 旧记录残留的回调，丢弃
+    v.removeEventListener("seeked", onSeeked);
+    // 不再做任何 video 操作；用户后续点 play 由 togglePlay 自己负责
+  };
+  v.addEventListener("seeked", onSeeked, { once: true });
+  // 触发 seek：用 0.001 微偏移让 webview 真正 seek 到首帧（currentTime=0 在某些实现下不触发 seeked）
+  try {
+    v.currentTime = 0.001;
+  } catch (_) {
+    // 极端兜底：设不到就保持原状
+    v.removeEventListener("seeked", onSeeked);
   }
 }
 // 切换记录时重置播放状态
 watch(selectedId, () => {
   isPlaying.value = false;
-  firstFramePrimed = false; // 新记录：允许重新触发"播一帧就暂停"
+  firstFramePrimed = false; // 新记录：允许重新触发首帧 seek
+  primeSeq++; // 让旧记录残留的 seeked 回调失效
   const v = mainVideoRef.value;
   if (v && !v.paused) v.pause();
 });
