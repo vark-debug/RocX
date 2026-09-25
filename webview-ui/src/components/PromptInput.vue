@@ -6,6 +6,7 @@ import type {
   MiniMaxResolution,
   MiniMaxParamConstraints,
 } from "@shared/messages";
+import type { ModelDescriptor, VideoGenCapability } from "../providers/core/types";
 
 const props = defineProps<{
   prompt: string;
@@ -13,13 +14,15 @@ const props = defineProps<{
   ratio: MiniMaxRatio;
   duration: number;
   resolution: MiniMaxResolution;
+  /** 当前 provider 提供的模型列表（来自 registry；按 provider + capability 渲染按钮） */
+  models: ModelDescriptor[];
   constraints: MiniMaxParamConstraints;
   hasReferences: boolean;
   canSubmit: boolean;
   polling: boolean;
   hasApiKey: boolean;
   hasProject: boolean;
-  /** 提示词优化（h3_context_ir）正在请求中（用于按钮 loading 态） */
+  /** 提示词优化正在请求中（用于按钮 loading 态） */
   optimizing?: boolean;
 }>();
 
@@ -30,23 +33,24 @@ const emit = defineEmits<{
   "update:duration": [number];
   "update:resolution": [MiniMaxResolution];
   submit: [];
-  /** 用户点击了右上角 ✨ 按钮，请求调用 h3_context_ir 优化 prompt */
+  /** 用户点击了右上角 ✨ 按钮，请求调用 provider 的 promptOptimization 能力 */
   optimize: [];
 }>();
 
 const modelPopoverOpen = ref(false);
 const paramsPopoverOpen = ref(false);
 
-const ratios: MiniMaxRatio[] = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"];
+/** 当前激活的 model descriptor（从父组件传入的 models 中查找） */
+const currentModelDesc = computed<ModelDescriptor | null>(
+  () => props.models.find((x) => x.modelId === props.model) ?? null,
+);
 
-const models: { value: MiniMaxModel; label: string }[] = [
-  { value: "MiniMax-H3", label: "H3 标准" },
-  { value: "MiniMax-H3-Max", label: "H3-Max 极速" },
-];
+/** 比例选项：从当前 model descriptor 的 paramConstraints.ratios 拿（不再硬编码） */
+const ratios = computed(() => currentModelDesc.value?.paramConstraints?.ratios ?? []);
 
 const modelLabel = computed(() => {
-  const m = models.find((x) => x.value === props.model);
-  return m ? m.label : props.model;
+  const m = currentModelDesc.value;
+  return m ? m.displayName : props.model;
 });
 
 const paramsSummary = computed(() => {
@@ -73,20 +77,24 @@ function onSubmitClick() {
   if (props.canSubmit) emit("submit");
 }
 
-/** ✨ 优化按钮可用条件：已配 Key + 当前模型是 H3 + prompt 非空 + 当前未在优化中 */
+/** ✨ 优化按钮可用条件：已配 Key + 当前模型具备 promptOptimization capability + prompt 非空 + 当前未在优化中 */
 const canOptimize = computed(() => {
   if (props.optimizing) return false;
   if (!props.hasApiKey) return false;
-  if (props.model !== "MiniMax-H3") return false;
-  return !!props.prompt.trim();
+  const m = currentModelDesc.value;
+  if (!m) return false;
+  return !!props.prompt.trim() && m.capabilities.includes("promptOptimization" as VideoGenCapability);
 });
 
 const optimizeTitle = computed(() => {
   if (props.optimizing) return "优化中…";
   if (!props.hasApiKey) return "请先在设置里配置 API Key";
-  if (props.model !== "MiniMax-H3") return "仅 H3 模型支持提示词优化";
+  const m = currentModelDesc.value;
+  if (!m || !m.capabilities.includes("promptOptimization" as VideoGenCapability)) {
+    return "当前模型不支持提示词优化";
+  }
   if (!props.prompt.trim()) return "请先填写提示词";
-  return "用 MiniMax-H3 优化提示词（h3_context_ir）";
+  return `用 ${m.displayName} 优化提示词`;
 });
 
 function onOptimizeClick() {
@@ -150,17 +158,17 @@ function onOptimizeClick() {
           <div class="radio-row radio-row--aligned">
             <label
               v-for="m in models"
-              :key="m.value"
+              :key="m.modelId"
               class="radio-item"
-              :class="{ active: model === m.value }"
+              :class="{ active: model === m.modelId }"
             >
               <input
                 type="radio"
-                :value="m.value"
-                :checked="model === m.value"
-                @change="emit('update:model', m.value)"
+                :value="m.modelId"
+                :checked="model === m.modelId"
+                @change="emit('update:model', m.modelId as MiniMaxModel)"
               />
-              <span>{{ m.label }}</span>
+              <span>{{ m.displayName }}</span>
             </label>
           </div>
         </div>
@@ -172,7 +180,7 @@ function onOptimizeClick() {
           <div class="group-label">宽高比</div>
           <div class="radio-row">
             <label
-              v-for="r in ratios.filter((rr) => hasReferences || rr !== 'adaptive')"
+              v-for="r in ratios.filter((rr: string) => hasReferences || rr !== 'adaptive')"
               :key="r"
               class="radio-item"
               :class="{ active: ratio === r, disabled: !hasReferences && r === 'adaptive' }"

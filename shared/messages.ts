@@ -12,6 +12,25 @@ export type RecordStatus =
 
 export type ReferenceType = "reference_video" | "reference_image" | "reference_audio";
 
+/** Provider 模型能力位（用于 UI 按能力隐藏按钮） */
+export type VideoGenCapability =
+  | "videoGeneration"
+  | "promptOptimization"
+  | "resolutionUpscale"
+  | "imageReference"
+  | "videoReference"
+  | "audioReference";
+
+/** 通用模型描述符（具体 provider 实现用） */
+export interface ModelDescriptor {
+  providerId: string;
+  modelId: string;
+  displayName: string;
+  description?: string;
+  paramConstraints: VideoParamConstraints;
+  capabilities: VideoGenCapability[];
+}
+
 export interface ReferenceItem {
   type: ReferenceType;
   localPath: string;
@@ -32,10 +51,12 @@ export interface GenerationRecord {
   createdAt: string;
   prompt: string;
   params: {
-    model: MiniMaxModel;
-    ratio: MiniMaxRatio;
+    model: VideoModel;
+    ratio: VideoRatio;
     duration: number;
-    resolution: MiniMaxResolution;
+    resolution: VideoResolution;
+    /** 当前记录对应的 provider id；老记录缺失时默认 "minimax" */
+    provider?: string;
   };
   references: ReferenceItem[];
   taskId?: string;
@@ -76,9 +97,10 @@ export interface ProjectRecords {
   storageMode: "primary" | "fallback";
 }
 
-export type MiniMaxModel = "MiniMax-H3" | "MiniMax-H3-Max";
+// ===== 中性命名（推荐新代码使用）=====
+export type VideoModel = "MiniMax-H3" | "MiniMax-H3-Max";
 
-export type MiniMaxRatio =
+export type VideoRatio =
   | "adaptive"
   | "21:9"
   | "16:9"
@@ -87,27 +109,44 @@ export type MiniMaxRatio =
   | "3:4"
   | "9:16";
 
-export type MiniMaxResolution = "480P" | "768P" | "2K";
+export type VideoResolution = "480P" | "768P" | "2K";
 
-export interface MiniMaxParamConstraints {
-  resolutions: MiniMaxResolution[];
+export interface VideoParamConstraints {
+  resolutions: VideoResolution[];
   durations: number[];
-  /** 仅参考模式可选 ratio=adaptive */
+  /** 模型支持的画面比例集（不含 "adaptive" 也可；存在 "adaptive" 表示文生视频场景也可选） */
+  ratios: VideoRatio[];
+  /** 仅参考模式可选 ratio=adaptive（已废弃，留作兼容：等价于 ratios 包含 "adaptive"） */
   ratioAdaptiveAllowed: boolean;
 }
 
-export const MINIMAX_PARAM_CONSTRAINTS: Record<MiniMaxModel, MiniMaxParamConstraints> = {
+/** MiniMax 当前默认 provider 的参数约束表（兼容旧名） */
+export const VIDEO_PARAM_CONSTRAINTS: Record<VideoModel, VideoParamConstraints> = {
   "MiniMax-H3": {
     resolutions: ["768P", "2K"],
     durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
     ratioAdaptiveAllowed: true,
   },
   "MiniMax-H3-Max": {
     resolutions: ["480P", "768P"],
     durations: [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+    ratios: ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "adaptive"],
     ratioAdaptiveAllowed: true,
   },
 };
+
+// ===== 旧名 alias（保持向后兼容）=====
+/** @deprecated Use VideoModel instead. */
+export type MiniMaxModel = VideoModel;
+/** @deprecated Use VideoRatio instead. */
+export type MiniMaxRatio = VideoRatio;
+/** @deprecated Use VideoResolution instead. */
+export type MiniMaxResolution = VideoResolution;
+/** @deprecated Use VideoParamConstraints instead. */
+export type MiniMaxParamConstraints = VideoParamConstraints;
+/** @deprecated Use VIDEO_PARAM_CONSTRAINTS instead. */
+export const MINIMAX_PARAM_CONSTRAINTS = VIDEO_PARAM_CONSTRAINTS;
 
 export interface MiniMaxCreateRequest {
   model: MiniMaxModel;
@@ -196,7 +235,7 @@ export interface UxptoWebviewAPI {
   }>;
 
   /** 弹 FilePicker，选文件 → 校验 → 调用 MiniMax upload */
-  pickAndUploadReference(args: { kind: FileKind }): Promise<{
+  pickAndUploadReference(args: { kind: FileKind; providerId?: string }): Promise<{
     ok: boolean;
     reference?: ReferenceItem;
     error?: string;
@@ -208,6 +247,7 @@ export interface UxptoWebviewAPI {
     localPath: string;
     fileName: string;
     sizeBytes: number;
+    providerId?: string;
   }): Promise<{
     ok: boolean;
     fileId?: string;
@@ -262,6 +302,7 @@ export interface UxptoWebviewAPI {
     localPath: string;
     fileName: string;
     kind: FileKind;
+    providerId?: string;
   }): Promise<{
     ok: boolean;
     reference?: ReferenceItem;
@@ -344,6 +385,7 @@ export interface UxptoWebviewAPI {
   uploadReferenceFile(args: {
     filePath: string;
     fileName: string;
+    providerId?: string;
   }): Promise<{
     ok: boolean;
     fileId?: string;
@@ -376,6 +418,9 @@ export interface UxptoWebviewAPI {
     inSec?: number;
     outSec?: number;
     durationSec?: number;
+    /** 导出视频的像素宽高（用于前端自动按比例填写） */
+    width?: number;
+    height?: number;
     error?: string;
   }>;
 }

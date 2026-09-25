@@ -58,6 +58,11 @@ const manifest: UXP_Manifest = {
     enableAlerts: true,
   },
   requiredPermissions: {
+    /**
+     * 网络白名单：按当前启用的 provider 域名集合维护。
+     * 扩展 provider 时（如 kling / runway），需在此追加对应域名，
+     * 并同步 `requiredPermissions.webview.domains`。
+     */
     localFileSystem: "fullAccess",
     launchProcess: {
       schemes: ["https", "slack", "file", "ws"],
@@ -66,13 +71,21 @@ const manifest: UXP_Manifest = {
     network: {
       domains: [
         `ws://localhost:${extraPrefs.hotReloadPort}`,
+        // MiniMax 默认 provider 域名
         "https://api.minimax.cn",
         "https://cdn.hailuoai.com",
         // MiniMax 生成结果 CDN（用户报告实际响应域名）
         "https://algeng-video-infer.oss-cn-shanghai.aliyuncs.com",
+        // 扩展 provider 时在此追加，例如：
+        // Kling: "https://api.klingai.com", "https://cdn.klingai.com"
+        // Runway: "https://api.runwayml.com", "https://cdn.runwayml.com"
       ],
     },
     clipboard: "readAndWrite",
+    /**
+     * Webview 白名单：需与 network.domains 保持同步；
+     * 扩展 provider 时同步在此追加对应域名。
+     */
     webview: {
       allow: "yes",
       allowLocalRendering: "yes",

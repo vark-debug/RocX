@@ -1,13 +1,18 @@
 /**
  * 记录操作 composable：从 RecordsPanel.vue 抽出
  * - 状态展示（statusOf / failedCardClass / failedTitle / errorTypeLabel / canRetrySelected）
- * - 升级 2K 判定（canUpgradeTo2K）
+ * - 升级 2K 判定（canUpgradeTo2K，按 provider + model.capability 决定）
  * - 拖拽到 PR 时间线（onDragStart / onDragOver / onDragEnd）
  * - 生成中耗时（generatingElapsed）
  * - 选中状态维护
  */
 import { computed, ref, watch, onBeforeUnmount } from "vue";
 import type { GenerationRecord } from "@shared/messages";
+import {
+  getProviderSync,
+  DEFAULT_PROVIDER_ID,
+} from "../providers/core/registry";
+import type { VideoGenCapability } from "../providers/core/types";
 
 // 注意：避免在 composable 公开 API 上硬编码 computed<T>，因为模板里只用 .value 读，
 // 用宽松类型避免 Vue 的 WritableComputedRef / ComputedRef 类型推导差异。
@@ -169,19 +174,32 @@ export function useRecordActions(
   // ---- 升级 2K 判定 ----
   /**
    * 是否允许对此记录发起"像素提升到 2K"：
-   *  - 模型必须是 H3（官方仅 H3 支持 video_regeneration）
-   *  - 当前分辨率必须是 768P（已是 2K 不需要升级；480P 仅 H3-Max 支持而 H3-Max 不支持升级）
+   *  - 模型必须具备 resolutionUpscale capability（按 provider + modelId 查）
+   *  - 当前分辨率必须是 768P（业务规则：MiniMax video_regeneration 仅 768P → 2K；已是 2K 不需要升级）
    *  - 状态必须是已生成 / 已导入
    *  - 源任务必须已有 taskId
+   *
+   * Fallback 行为：若当前 record 没有 provider 字段（极旧数据），
+   * 用 DEFAULT_PROVIDER_ID 兜底；保留 model === "MiniMax-H3" 作为兼容硬编码 fallback，
+   * 避免破坏 Task 1-2 之前生成的极旧记录。
    */
   const canUpgradeTo2K = computed(() => {
     const r = selected.value;
     if (!r) return false;
     if (r.status !== "generated" && r.status !== "imported") return false;
-    if (r.params.model !== "MiniMax-H3") return false;
     if (r.params.resolution !== "768P") return false;
     if (!r.taskId) return false;
-    return true;
+    // 按 provider + modelId 的 capability 判断
+    const provider = getProviderSync(r.params.provider || DEFAULT_PROVIDER_ID);
+    if (!provider) {
+      // 没有对应 provider 实例：保留旧 hardcode 兼容（仅 MiniMax-H3）
+      return r.params.model === "MiniMax-H3";
+    }
+    const model = provider.models.find((m) => m.modelId === r.params.model);
+    if (!model) {
+      return r.params.model === "MiniMax-H3";
+    }
+    return model.capabilities.includes("resolutionUpscale" as VideoGenCapability);
   });
 
   // ---- 生成中已耗时（每秒 tick 触发 reactive） ----

@@ -102,6 +102,8 @@ export const captureVideoCore = {
     inSec?: number;
     outSec?: number;
     durationSec?: number;
+    width?: number;
+    height?: number;
     error?: string;
   }> {
     console.log("[captureVideo] captureWorkAreaOnlyAsReference start", opts);
@@ -110,6 +112,26 @@ export const captureVideoCore = {
       if (!project) return { ok: false, error: "无活动项目" };
       const sequence = await project.getActiveSequence();
       if (!sequence) return { ok: false, error: "无活动序列" };
+
+      // 取序列帧尺寸（用于按比例自动填写）
+      let width: number | undefined;
+      let height: number | undefined;
+      try {
+        const frameSize: any = await (sequence as any).getFrameSize?.();
+        if (frameSize) {
+          if (typeof frameSize.width === "number") width = Math.round(frameSize.width);
+          else if (typeof frameSize.right === "number" && typeof frameSize.left === "number") {
+            width = Math.round(frameSize.right - frameSize.left);
+          }
+          if (typeof frameSize.height === "number") height = Math.round(frameSize.height);
+          else if (typeof frameSize.bottom === "number" && typeof frameSize.top === "number") {
+            height = Math.round(frameSize.bottom - frameSize.top);
+          }
+        }
+      } catch (e) {
+        console.warn("[captureVideo] getFrameSize failed", e);
+      }
+      console.log("[captureVideo] frame size:", width, "x", height);
 
       let inSec = 0;
       let outSec = 0;
@@ -210,6 +232,8 @@ export const captureVideoCore = {
         inSec,
         outSec,
         durationSec,
+        width,
+        height,
       };
     } catch (e: any) {
       console.error("[captureVideo] captureOnly EXCEPTION:", e);

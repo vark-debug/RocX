@@ -20,6 +20,40 @@ import { initWebview } from "./webview-setup";
 import { setBridge, bridge } from "./services/bridge";
 import { MiniMaxAPI, MiniMaxError } from "./services/MiniMax";
 
+// ---- provider 抽象层（Task 1-2） ----
+import {
+  registerProvider,
+  getProvider,
+  getProviderSync,
+  listProviders,
+  DEFAULT_PROVIDER_ID,
+} from "./providers/core/registry";
+import { minimaxProvider } from "./providers/minimax";
+import type { ModelDescriptor, VideoGenCapability } from "./providers/core/types";
+import type { VideoGenProvider } from "./providers/core/VideoGenProvider";
+
+/** 默认 provider id（首版本：minimax） */
+const DEFAULT_PROVIDER = DEFAULT_PROVIDER_ID;
+
+/** 当前激活的 provider id（首版本写死 minimax；后续可让用户在设置里切换） */
+const currentProviderId = ref<string>(DEFAULT_PROVIDER);
+
+/** 当前 provider 实例（异步获取） */
+const currentProvider = ref<VideoGenProvider | null>(null);
+
+/** 当前 provider 的模型列表（computed） */
+const providerModels = computed<ModelDescriptor[]>(() => {
+  return currentProvider.value?.models ?? [];
+});
+
+/** 查找当前 provider + modelId 对应的 ModelDescriptor */
+function findModelDescriptor(modelId: string, providerId?: string): ModelDescriptor | null {
+  const pid = providerId || currentProviderId.value;
+  const provider = getProviderSync(pid) || currentProvider.value;
+  if (!provider) return null;
+  return provider.models.find((m: ModelDescriptor) => m.modelId === modelId) ?? null;
+}
+
 /** 把任意异常归一为 records 用的 error 结构（带 httpStatus / errorType） */
 function toRecordError(e: any) {
   if (e instanceof MiniMaxError) {
@@ -106,10 +140,17 @@ async function loadRecords() {
       guid: r.data.projectGuid,
       name: "",
     };
-    records.value = r.data.records;
+    // 旧 records 兼容：缺省 provider = "minimax"（Task 4 之前写入的 record 没有 provider 字段）
+    records.value = r.data.records.map((rec) => ({
+      ...rec,
+      params: {
+        ...rec.params,
+        provider: rec.params.provider || DEFAULT_PROVIDER_ID,
+      },
+    }));
     storageMode.value = r.data.storageMode;
     // 故障恢复：扫描 generating 状态的记录
-    for (const rec of r.data.records) {
+    for (const rec of records.value) {
       if (rec.status === "generating" && rec.taskId) {
         resumePolling(rec);
       }
@@ -325,6 +366,51 @@ async function captureFrameAsReference() {
     });
 }
 
+/** 把 w:h 化简成最简整数比 → 字符串如 "16:9" / "21:9" / "4:3" */
+function gcd(a: number, b: number): number {
+  while (b) {
+    [a, b] = [b, a % b];
+  }
+  return a;
+}
+function ratioStringFromSize(w: number, h: number): string | null {
+  if (!w || !h) return null;
+  const g = gcd(w, h);
+  return `${w / g}:${h / g}`;
+}
+
+/**
+ * 把参考视频的宽高比与当前模型合法 ratio 列表匹配，返回最接近的一个。
+ * - 完全相等时直接返回
+ * - 否则按"实际比值 vs 合法比值"的差值排序，取最小
+ * - 与"adaptive"不比较（adaptive 不是具体比值）
+ * - candidates 不是数组时返回 null（防御性）
+ */
+function pickClosestRatio(
+  actual: string,
+  candidates: readonly string[] | undefined | null,
+): string | null {
+  if (!Array.isArray(candidates) || candidates.length === 0) return null;
+  const valid = candidates.filter((r) => r !== "adaptive");
+  if (valid.length === 0) return null;
+  const exact = valid.find((r) => r === actual);
+  if (exact) return exact;
+  const m = actual.match(/^(\d+):(\d+)$/);
+  if (!m) return null;
+  const aw = Number(m[1]);
+  const ah = Number(m[2]);
+  const ar = aw / ah;
+  let best: { ratio: string; diff: number } | null = null;
+  for (const r of valid) {
+    const cm = r.match(/^(\d+):(\d+)$/);
+    if (!cm) continue;
+    const cr = Number(cm[1]) / Number(cm[2]);
+    const diff = Math.abs(ar - cr);
+    if (!best || diff < best.diff) best = { ratio: r, diff };
+  }
+  return best?.ratio ?? null;
+}
+
 async function captureVideoAsReference() {
   // 校验视频数量上限
   const v = references.value.filter((x) => x.type === "reference_video").length;
@@ -363,6 +449,37 @@ async function captureVideoAsReference() {
       duration.value = ds.find((d) => d >= sec) ?? maxD;
     }
     console.log(`[webview] auto-filled duration=${duration.value}s from work area ${sec.toFixed(2)}s`);
+  }
+  // 智能填写画面比例：仅当当前没有任何视频参考且 width/height 已知
+  // 与抓视频 duration 自动填写一致：通用能力，不绑定具体 provider
+  if (
+    isFirstVideoRef &&
+    r.width &&
+    r.height &&
+    r.width > 0 &&
+    r.height > 0
+  ) {
+    const actual = ratioStringFromSize(r.width, r.height);
+    if (actual) {
+      // 优先从当前 model descriptor 拿合法 ratio（provider 中性、Task 5 后的权威来源）；
+      // fallback 到旧 MINIMAX_PARAM_CONSTRAINTS（向后兼容）
+      const currentModel = findModelDescriptor(model.value, currentProviderId.value);
+      const validRatios =
+        currentModel?.paramConstraints?.ratios ?? constraints.value?.ratios;
+      if (Array.isArray(validRatios)) {
+        const closest = pickClosestRatio(actual, validRatios);
+        if (closest && ratio.value !== closest) {
+          ratio.value = closest;
+          console.log(
+            `[webview] auto-filled ratio=${closest} from work area ${r.width}x${r.height} (${actual})`,
+          );
+        }
+      } else {
+        console.warn(
+          `[webview] skip ratio auto-fill: no valid ratios list for model=${model.value}`,
+        );
+      }
+    }
   }
   // 关键：拿数组里的 reactive proxy 引用（不是 bridge 返回的 plain object），
   // 这样引用比较永远找得到，且属性赋值触发响应式更新
@@ -426,6 +543,12 @@ async function submitGenerate() {
     showToast("无活动 PR 项目，无法记录生成历史");
     return;
   }
+  // 按 capability 校验当前模型是否支持视频生成（provider 抽象）
+  const currentModelDesc = findModelDescriptor(model.value);
+  if (!currentModelDesc?.capabilities.includes("videoGeneration" as VideoGenCapability)) {
+    showToast("当前模型不支持视频生成");
+    return;
+  }
 
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
@@ -438,6 +561,7 @@ async function submitGenerate() {
       ratio: ratio.value,
       duration: duration.value,
       resolution: resolution.value,
+      provider: currentProviderId.value,
     },
     references: [...references.value],
     status: "pending",
@@ -554,10 +678,13 @@ async function upgradeTo2K(rec: GenerationRecord) {
     showToast("仅对已生成 / 已导入的视频可以升级");
     return;
   }
-  if (rec.params.model !== "MiniMax-H3") {
-    showToast("仅 H3 模型支持像素提升");
+  // 按 provider + model 的 capability 判断（不再硬编码 MiniMax-H3）
+  const upgradeModelDesc = findModelDescriptor(rec.params.model, rec.params.provider);
+  if (!upgradeModelDesc?.capabilities.includes("resolutionUpscale" as VideoGenCapability)) {
+    showToast("当前模型不支持像素提升");
     return;
   }
+  // 业务规则保留：分辨率升级是 MiniMax 业务规则（768P → 2K）
   if (rec.params.resolution !== "768P") {
     showToast("仅 768P 分辨率可升级到 2K");
     return;
@@ -579,10 +706,11 @@ async function upgradeTo2K(rec: GenerationRecord) {
     createdAt: now,
     prompt: rec.prompt,
     params: {
-      model: "MiniMax-H3",
+      model: rec.params.model,
       ratio: rec.params.ratio,
       duration: rec.params.duration,
       resolution: "2K",
+      provider: rec.params.provider || currentProviderId.value,
     },
     references: [...rec.references],
     status: "pending",
@@ -697,8 +825,10 @@ async function optimizePrompt() {
     showToast("请先填写提示词");
     return;
   }
-  if (model.value !== "MiniMax-H3") {
-    showToast("仅 H3 模型支持提示词优化");
+  // 按 provider + model 的 capability 判断（不再硬编码 MiniMax-H3）
+  const optimizeModelDesc = findModelDescriptor(model.value);
+  if (!optimizeModelDesc?.capabilities.includes("promptOptimization" as VideoGenCapability)) {
+    showToast("当前模型不支持提示词优化");
     return;
   }
   if (optimizingPrompt.value) return;
@@ -724,10 +854,11 @@ async function optimizePrompt() {
     createdAt: now,
     prompt: prompt.value,
     params: {
-      model: "MiniMax-H3",
+      model: model.value,
       ratio: ratioArg,
       duration: duration.value,
       resolution: "768P",
+      provider: currentProviderId.value,
     },
     references: [...validRefs],
     status: "pending",
@@ -805,6 +936,12 @@ const generatedCount = computed(() => records.value.filter((r) => r.status === "
 
 // ---------- 初始化 ----------
 onMounted(async () => {
+  // 默认注册 MiniMax（dynamic import 走 registry）
+  if (!listProviders().find((p) => p.providerId === DEFAULT_PROVIDER)) {
+    registerProvider(minimaxProvider);
+  }
+  // 异步获取当前 provider 实例
+  currentProvider.value = await getProvider(currentProviderId.value);
   apiKey.value = await bridge.getApiKey();
   // 获取项目信息
   const pi = await bridge.queryProjectState();
@@ -881,6 +1018,7 @@ function onSettingsSave(key: string) {
         v-model:ratio="ratio"
         v-model:duration="duration"
         v-model:resolution="resolution"
+        :models="providerModels"
         :constraints="constraints"
         :has-references="references.length > 0"
         :can-submit="canSubmit"
