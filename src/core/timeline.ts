@@ -8,7 +8,7 @@
  */
 import { premierepro } from "../globals";
 import { filesCore } from "./files";
-import type { ProjectRecords } from "./messages";
+import type { ProjectRecords } from "@shared/messages";
 
 interface InsertArgs {
   recordIds: string[];
@@ -137,9 +137,9 @@ export const timelineCore = {
       const actions: any[] = [];
       let txError: any = null;
 
-      project.lockedAccess(() => {
-        try {
-          project.executeTransaction((compoundAction: any) => {
+      try {
+        await project.lockedAccess(async () => {
+          await project.executeTransaction(async (compoundAction: any) => {
             for (const f of found) {
               try {
                 const action = editor.createOverwriteItemAction(
@@ -158,10 +158,10 @@ export const timelineCore = {
               }
             }
           }, "AI 生成插入时间线");
-        } catch (e) {
-          txError = txError || e;
-        }
-      });
+        });
+      } catch (e) {
+        txError = txError || e;
+      }
 
       if (txError) return { ok: false, error: String(txError?.message || txError) };
       if (actions.length === 0) {

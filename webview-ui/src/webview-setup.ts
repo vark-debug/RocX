@@ -1,6 +1,6 @@
 import * as Comlink from "comlink";
 
-import type { BridgeAPI } from "./services/messages";
+import type { UxptoWebviewAPI } from "@shared/messages";
 import { updateColorScheme } from "./webview-api";
 
 interface UXPWebviewWindow extends Window {
@@ -24,7 +24,7 @@ const hostEndpoint = {
 
 export const initWebview = (
   webviewAPI: object,
-): { page: string; api: BridgeAPI } => {
+): { page: string; api: UxptoWebviewAPI } => {
   const page =
     new URL(location.href).searchParams.get("page") ||
     location.href.split("/").pop()!.replace(".html", "");
@@ -33,7 +33,7 @@ export const initWebview = (
   const comlinkAPI = Comlink.wrap(endpoint);
   Comlink.expose(webviewAPI, endpoint);
   //@ts-ignore
-  const api = comlinkAPI.api as BridgeAPI;
+  const api = comlinkAPI.api as UxptoWebviewAPI;
   // update color scheme on load
   api.getColorScheme().then((scheme: any) => updateColorScheme(scheme));
   return { api, page };

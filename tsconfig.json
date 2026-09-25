@@ -13,10 +13,15 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@shared/*": ["shared/*"]
+    },
     "types": ["@adobe/cc-ext-uxp-types", "@types/photoshop", "@types/node"]
   },
   "include": [
     "./src",
+    "./shared",
     "./uxp.config.ts",
     "./webview-ui/src/webview.ts",
     "./webview-ui/src/webview-api.ts"

@@ -2,15 +2,15 @@
  * Webview 端调用 UXP API 的统一封装
  * initWebview 返回的 api 代理经过 Comlink 直接转发调用
  */
-import type { BridgeAPI, ProjectRecords, FileKind } from "./messages";
+import type { UxptoWebviewAPI, ProjectRecords, FileKind } from "@shared/messages";
 
-let _api: BridgeAPI | null = null;
+let _api: UxptoWebviewAPI | null = null;
 
-export const setBridge = (api: BridgeAPI) => {
+export const setBridge = (api: UxptoWebviewAPI) => {
   _api = api;
 };
 
-const ensure = (): BridgeAPI => {
+const ensure = (): UxptoWebviewAPI => {
   if (!_api) throw new Error("桥未初始化");
   return _api;
 };

@@ -13,10 +13,15 @@
     "isolatedModules": true,
     "jsx": "preserve",
     "noEmit": true,
+    "baseUrl": "..",
+    "paths": {
+      "@shared/*": ["shared/*"]
+    },
     "types": []
   },
   "include": [
     "./src",
-    "./src/**/*.d.ts"
+    "./src/**/*.d.ts",
+    "../shared/**/*"
   ]
 }

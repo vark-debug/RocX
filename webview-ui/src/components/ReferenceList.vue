@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import type { ReferenceItem, FileKind } from "../services/messages";
+import type { ReferenceItem, FileKind } from "@shared/messages";
 
 const props = defineProps<{
   references: ReferenceItem[];

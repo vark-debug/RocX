@@ -5,7 +5,7 @@
  * 要求 manifest 中 localFileSystem: "fullAccess"
  */
 import { uxp } from "../globals";
-import type { FileKind, ReferenceItem } from "./messages";
+import type { FileKind, ReferenceItem } from "@shared/messages";
 
 export const WORK_DIR_NAME = "AI-Generated-Media";
 export const PROJECT_IMPORT_SUBDIR = "AI_Generated_Media";
@@ -689,7 +689,7 @@ export const filesCore = {
         try {
           f = await fs.getEntryWithUrl(url);
           console.log(`[files] ensureProjectSubdir getEntry 结果: ${f ? "命中" : "未命中"}`);
-        } catch (e) {
+        } catch (e: any) {
           console.log(`[files] ensureProjectSubdir getEntry 异常: ${String(e?.message || e)}`);
           f = null;
         }
@@ -701,7 +701,7 @@ export const filesCore = {
               overwrite: false,
             });
             console.log(`[files] ensureProjectSubdir 创建成功`);
-          } catch (e) {
+          } catch (e: any) {
             console.log(`[files] ensureProjectSubdir 创建失败: ${String(e?.message || e)}`);
             return { ok: false, error: `无法创建目录 ${curPath}: ${String(e?.message || e)}` };
           }
@@ -765,7 +765,7 @@ export const filesCore = {
     }
   },
 
-  /** 把文件移动到目标目录。注意：UXP 方法是 moveTo/copyTo（没有 copy）；moveTo 可能"实际成功但 reject"，失败后必须校验目标 */
+  /** 把文件移动到目标目录。采用 copyTo + delete 两阶段原子流程，避免 moveTo 的 fire-and-forget race。 */
   async moveFileToDir(
     filePath: string,
     destFolder: any,
@@ -775,8 +775,7 @@ export const filesCore = {
       // plugin-data 容器内必须走协议 URL，file:// 会被沙箱拒绝 → 用 getEntryAnyPath
       const file = await this.getEntryAnyPath(filePath);
       if (!file) {
-        // 源不可访问：检查目标目录是否已有同名文件（上次移动实际成功但
-        // 记录路径未更新/被手动回退的状态不一致场景）→ 自愈：直接用目标文件
+        // 源不可访问：兜底检查目标目录是否已有同名文件（上次移动残留）→ 自愈使用
         try {
           const d = await destFolder.getEntry(fileName);
           if (d && !d.isFolder) {
@@ -791,72 +790,47 @@ export const filesCore = {
         }
         return { ok: false, error: `源文件不可访问: ${filePath}` };
       }
-      // 目标目录里是否已有同名文件（moveTo/copyTo "实际成功但 reject" 或历史残留）
-      const destPathOf = async (): Promise<string | null> => {
+
+      // 目标已存在 → 生成 _1 / _2 后缀（保持现有重名策略）
+      let finalName = fileName;
+      let counter = 1;
+      while (true) {
+        let exists = false;
         try {
-          const d = await destFolder.getEntry(fileName);
-          if (d && !d.isFolder) {
-            return d.nativePath || (await getFs().getNativePath(d));
-          }
+          const d = await destFolder.getEntry(finalName);
+          if (d && !d.isFolder) exists = true;
         } catch (e) {
           // not found
         }
-        return null;
-      };
+        if (!exists) break;
+        const dot = fileName.lastIndexOf(".");
+        finalName =
+          dot > 0
+            ? `${fileName.slice(0, dot)}_${counter}${fileName.slice(dot)}`
+            : `${fileName}_${counter}`;
+        counter++;
+      }
 
-      // 1) moveTo
+      // 两阶段原子：copyTo + 校验落盘 + delete
+      const copied = await file.copyTo(destFolder, finalName, {
+        overwrite: false,
+      });
+      const newPath = copied.nativePath || (await getFs().getNativePath(copied));
+
+      // 校验目标文件已真实可见
+      const verify = await this.waitForFileReadyInFolder(destFolder, finalName, 3000);
+      if (!verify.ok) {
+        return { ok: false, error: `复制后目标文件未就绪: ${verify.error}` };
+      }
+
+      // 删除源
       try {
-        const moved = await file.moveTo(destFolder, { overwrite: true });
-        if (moved) {
-          return {
-            ok: true,
-            newPath:
-              moved.nativePath || (await getFs().getNativePath(moved)),
-          };
-        }
+        await file.delete();
       } catch (e) {
-        console.warn("[files] moveTo threw:", e?.message || e);
-        const p = await destPathOf();
-        if (p) {
-          console.log("[files] moveTo 实际已生效（Promise reject 但目标已存在）");
-          return { ok: true, newPath: p };
-        }
+        console.warn("[files] 源文件删除失败（保留副本，不影响功能）:", e);
       }
 
-      // 2) moveTo 没成 → copyTo（UXP 正确方法名）+ 删源
-      try {
-        const copied = await file.copyTo(destFolder, fileName, {
-          overwrite: true,
-        });
-        if (copied) {
-          try {
-            await file.delete();
-          } catch (e) {
-            console.warn("[files] 源文件删除失败（保留副本，不影响导入）:", e);
-          }
-          return {
-            ok: true,
-            newPath:
-              copied.nativePath || (await getFs().getNativePath(copied)),
-          };
-        }
-      } catch (e) {
-        console.warn("[files] copyTo failed:", e?.message || e);
-        const p = await destPathOf();
-        if (p) return { ok: true, newPath: p };
-      }
-
-      // 3) 兜底：目标已有同名文件（上次残留）→ 用目标并清理源
-      const p = await destPathOf();
-      if (p) {
-        try {
-          await file.delete();
-        } catch (e) {
-          // ignore
-        }
-        return { ok: true, newPath: p };
-      }
-      return { ok: false, error: "moveTo/copyTo 均失败且目标无文件" };
+      return { ok: true, newPath };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };
     }

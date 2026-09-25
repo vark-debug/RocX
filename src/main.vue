@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { onMounted } from "vue";
 import { webviewInitHost } from "./webview-setup-host";
-import type { WebviewAPI } from "../webview-ui/src/webview";
+import type { WebviewToUxPAPI } from "../webview-ui/src/webview";
 
 const webviewUI = import.meta.env.VITE_BOLT_WEBVIEW_UI === "true";
 
-let webviewAPIs: WebviewAPI[];
-let mainWebviewAPI: WebviewAPI;
+let webviewAPIs: WebviewToUxPAPI[];
+let mainWebviewAPI: WebviewToUxPAPI;
 onMounted(async () => {
   if (webviewUI) {
     webviewAPIs = await webviewInitHost({ multi: true });

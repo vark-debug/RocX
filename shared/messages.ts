@@ -1,6 +1,6 @@
 /**
  * 共享消息协议 + 业务类型定义
- * UXP 端（src/）与 Webview 端（webview-ui/src/）共用
+ * UXP 端与 WebView 端共用
  */
 
 export type RecordStatus =
@@ -46,6 +46,10 @@ export interface GenerationRecord {
   error?: {
     message: string;
     requestId?: string;
+    /** MiniMax API 错误类型（如 insufficient_balance_error），用于失败卡片分主题 */
+    errorType?: string;
+    /** HTTP status code */
+    httpStatus?: number;
   };
   usage?: {
     total_seconds?: number;
@@ -54,6 +58,14 @@ export interface GenerationRecord {
   submittedAt?: string;
   /** 最后一次轮询时间戳 */
   lastPolledAt?: string;
+  /**
+   * 像素提升链路：
+   * - parentTaskId：本记录由哪条 taskId 升级而来（即 source_task_id）
+   * - upgradedFromResolution：升级前的分辨率（如 '768P'），升级后通常为 '2K'
+   * 用于把"原 768P 任务"和"升级出来的 2K 任务"关联起来，避免重复升级 / 重复扣费
+   */
+  parentTaskId?: string;
+  upgradedFromResolution?: MiniMaxResolution;
 }
 
 export interface ProjectRecords {
@@ -111,10 +123,17 @@ export interface MiniMaxCreateResponse {
 }
 
 export interface MiniMaxQueryResponse {
+  task_id?: string;
+  model?: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  content?: { url?: string };
+  /** 视频生成任务：content.url = 产物 CDN 地址；h3_context_ir 任务：content.prompt = 优化后提示词 */
+  content?: { url?: string; prompt?: string };
   error?: { message: string; http_code?: number };
   usage?: { total_seconds?: number };
+  resolution?: string;
+  duration?: number;
+  ratio?: string;
+  task_type?: string;
   request_id?: string;
 }
 
@@ -126,7 +145,7 @@ export interface MiniMaxUploadResponse {
 export type FileKind = "video" | "audio" | "image";
 
 /** UXP 端通过 bridge 暴露给 Webview 的完整接口 */
-export interface BridgeAPI {
+export interface UxptoWebviewAPI {
   /** Echo 测试 */
   echo(message: string): Promise<string>;
 
@@ -225,10 +244,12 @@ export interface BridgeAPI {
 
   /**
    * 把视频导入到 PR 项目（仅 importFiles，不插入时间线）
+   * moved：导入前生成结果被移动到项目旁 Imports/ 后的路径映射
    */
   importToProject(args: { recordIds: string[] }): Promise<{
     ok: boolean;
     imported?: string[];
+    moved?: Array<{ recordId: string; newPath: string }>;
     error?: string;
   }>;
 
@@ -360,7 +381,7 @@ export interface BridgeAPI {
 }
 
 /** Webview 端通过 bridge 暴露给 UXP 的 API（事件 / 推送） */
-export interface WebviewAPI {
+export interface WebviewToUxPAPI {
   /** UXP 端推主题 */
   updateColorScheme(scheme: { theme: string; colors: Record<string, string> }): void;
   /** UXP 端推项目切换 */

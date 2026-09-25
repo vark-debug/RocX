@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted } from "vue";
-import type { GenerationRecord } from "../services/messages";
+import type { GenerationRecord } from "@shared/messages";
 import { bridge } from "../services/bridge";
 
 const props = defineProps<{

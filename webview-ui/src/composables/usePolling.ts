@@ -6,7 +6,7 @@
  */
 import { ref, onBeforeUnmount } from "vue";
 import { MiniMaxAPI } from "../services/MiniMax";
-import type { MiniMaxQueryResponse } from "../services/messages";
+import type { MiniMaxQueryResponse } from "@shared/messages";
 
 export interface PollingOpts {
   taskId: string;

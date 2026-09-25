@@ -1,0 +1,427 @@
+.records-panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;          /* 允许 flex 子项按容器收缩（thumb-column 滚动条生效关键） */
+  overflow: hidden;
+  /* 浮动窗 (.floating-prompt-bar) 绝对定位覆盖底部 ~80px，
+     这里 padding-bottom 让 thumb-column 高度扣除浮动窗占位，滚动条按时出现 */
+  padding-bottom: 100px;
+  box-sizing: border-box;
+}
+
+/* 左列：缩略图（保留滚动能力但隐藏滚动条 UI） */
+.thumb-column {
+  width: 80px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  /* 高度约束：min-height:0 让 flex row 不撑大父容器；
+     flex-grow:0 + flex-basis:auto 让高度完全受父容器约束 → 溢出触发滚动 */
+  min-height: 0;
+  align-self: stretch;
+  border-right: 1px solid var(--uxp-host-border-color, #454545);
+  /* 隐藏滚动条 UI（但保留滚动能力：鼠标滚轮 / 触控板 / 拖动均可） */
+  scrollbar-width: none;             /* Firefox */
+  -ms-overflow-style: none;          /* IE / 旧 Edge */
+}
+
+.thumb-item {
+  position: relative;
+  /* width 100% + box-sizing 让缩略图严格按 80px 容器宽度计算，
+     不被 thumb-column padding 干扰 */
+  width: 100%;
+  box-sizing: border-box;
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+  flex-shrink: 0;          /* 不压缩；溢出时让父容器出滚动条 */
+
+  &:hover {
+    border-color: var(--uxp-host-border-color, #666);
+  }
+
+  &.active {
+    border-color: var(--uxp-host-link-text-color, #4b9cf5);
+  }
+}
+.thumb-column::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;                     /* Chromium / WebKit / Bolt UXP webview */
+}
+
+.thumb-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* UXP 端抽帧 JPG（首帧缓存），与 .thumb-video 共用 16:9 容器布局 */
+.thumb-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  /* 防止图片未加载完成时容器塌缩到 0（与 .thumb-item 的 aspect-ratio:16/9 配合即可） */
+  background: #000;
+}
+
+.thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--uxp-host-border-color, #383838);
+}
+.thumb-placeholder-icon {
+  font-size: 18px;
+  opacity: 0.6;
+}
+
+.thumb-status {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+}
+
+/* 右列：详情 */
+.detail-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px 4px; // 底部只留少量间距：让 .preview-area 自身贴近下方的 .floating-prompt-bar
+  overflow: hidden;
+  min-width: 0;
+}
+
+.detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 4px;
+  flex-shrink: 0;
+  container-type: inline-size;
+  container-name: detail-header;
+}
+
+.meta-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+.meta-model {
+  font-weight: 600;
+  color: var(--uxp-host-text-color, #fff);
+}
+.meta-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+.upgrade-badge {
+  background: rgba(255, 165, 0, 0.18);
+  color: #ffa500;
+  border: 1px solid rgba(255, 165, 0, 0.4);
+}
+.meta-sep {
+  opacity: 0.4;
+}
+.meta-param {
+  opacity: 0.8;
+}
+.meta-spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-label {
+  font-size: 11px;
+  opacity: 0.85;
+}
+.header-btn {
+  background: var(--uxp-host-border-color, #383838);
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  &:hover {
+    background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
+  }
+}
+
+/* 提示词（meta-line 内联，自动收缩省略号） */
+.prompt-inline {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+  font-size: 11px;
+}
+
+/* 容器查询：detail-header 太窄时隐藏提示词
+   （参数 + 状态 + 操作固定占空间，提示词按比例收缩后仍可能挤不下时整段隐藏） */
+@container detail-header (max-width: 360px) {
+  .prompt-inline {
+    display: none;
+  }
+}
+
+/* 主预览 */
+.preview-area {
+  flex: 1;
+  min-height: 120px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.main-video-wrap {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+
+.main-video {
+  grid-area: 1 / 1;        /* 与 img 叠在同一格，保证两个元素完全重合 */
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+  border-radius: 4px;
+  display: block;
+  cursor: pointer;
+}
+
+.main-frame-img {
+  grid-area: 1 / 1;        /* 与 video 叠在同一格（grid 行/列） */
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  background: #000;
+  border-radius: 4px;
+  display: block;
+  cursor: pointer;
+  z-index: 2;
+  pointer-events: auto;
+}
+
+.play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 5;
+}
+
+.preview-loading {
+  font-size: 12px;
+  opacity: 0.6;
+  padding: 20px;
+}
+
+.failed-card {
+  padding: 12px;
+  background: rgba(217, 83, 79, 0.1);
+  border: 1px solid rgba(217, 83, 79, 0.4);
+  border-radius: 4px;
+  font-size: 11px;
+  width: 100%;
+  text-align: left;
+}
+.failed-title {
+  font-weight: 600;
+  color: #d9534f;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+.failed-msg {
+  margin-bottom: 2px;
+  word-break: break-word;
+  /* 提示词过长时最多显示 4 行并省略，避免撑高失败卡片挤掉视频预览 */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-clamp: 4;
+}
+.failed-req {
+  opacity: 0.7;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+.failed-type {
+  opacity: 0.6;
+  font-size: 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  margin-bottom: 2px;
+}
+.failed-status {
+  opacity: 0.6;
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+
+/* 余额不足：更醒目的橙色 */
+.failed-card-balance {
+  background: rgba(255, 165, 0, 0.12);
+  border-color: rgba(255, 165, 0, 0.5);
+  .failed-title {
+    color: #ffa500;
+  }
+}
+.failed-card-auth {
+  background: rgba(220, 53, 69, 0.15);
+  border-color: rgba(220, 53, 69, 0.5);
+}
+
+/* 生成中卡片（继承 failed-card 样式 + 蓝色主题 + 顶部动态条） */
+.generating-card {
+  background: rgba(75, 156, 245, 0.08);
+  border-color: rgba(75, 156, 245, 0.4);
+  overflow: hidden;
+  position: relative;
+  .failed-title {
+    color: var(--uxp-host-link-text-color, #4b9cf5);
+    margin-top: 4px;
+  }
+}
+.generating-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(75, 156, 245, 0.1);
+  overflow: hidden;
+}
+.generating-bar-fill {
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--uxp-host-link-text-color, #4b9cf5),
+    transparent
+  );
+  animation: generating-indeterminate 1.4s infinite linear;
+}
+@keyframes generating-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.retry-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  background: #d9534f;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover { opacity: 0.85; }
+}
+
+.empty-card {
+  font-size: 12px;
+  opacity: 0.5;
+  padding: 30px;
+}
+
+.detail-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  opacity: 0.5;
+}
+
+/* 操作按钮行 */
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+.action-spacer {
+  flex: 1;
+}
+.action-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: var(--uxp-host-border-color, #383838);
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover:not(:disabled) {
+    background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  &.primary {
+    background: var(--uxp-host-link-text-color, #4b9cf5);
+    color: #fff;
+  }
+  &.upgrade-btn {
+    background: rgba(255, 165, 0, 0.18);
+    color: #ffa500;
+    &:hover:not(:disabled) {
+      background: rgba(255, 165, 0, 0.32);
+    }
+  }
+  &.danger {
+    background: rgba(217, 83, 79, 0.2);
+    color: #d9534f;
+    &:hover {
+      background: rgba(217, 83, 79, 0.35);
+    }
+  }
+}

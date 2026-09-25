@@ -12,7 +12,7 @@ import type {
   MiniMaxResolution,
   ReferenceItem,
   ReferenceType,
-} from "./messages";
+} from "@shared/messages";
 
 const CREATE_URL = "https://api.minimax.cn/v2/video_generation";
 const QUERY_BASE = "https://api.minimax.cn/v2/query/video_generation";

@@ -133,16 +133,31 @@ export const projectCore = {
 
 export type ProjectCore = typeof projectCore;
 
-// 在文件加载时自动监听 app.activeProject-change 事件（如支持）；并周期性兜底轮询
-(async () => {
-  const app: any = premierepro as any;
-  const tryBind = () => {
+/**
+ * 启动项目切换监听；返回 cleanup 函数。
+ * 调用方负责在 webview 重载时调用 cleanup。
+ *
+ * - 优先尝试事件绑定（premiereProjectChanged / onActiveProjectChange）
+ * - 失败兜底：setInterval 周期性探测
+ */
+export function setupProjectWatchers(): () => void {
+  let cleaned = false;
+  const cleanups: Array<() => void> = [];
+
+  const tryEventBind = (): boolean => {
+    const app: any = premierepro as any;
     if (app?.app?.eventManager?.on) {
       try {
-        app.app.eventManager.on(
-          "premiereProjectChanged",
-          () => projectCore._onChanged().catch(() => {}),
-        );
+        const handler = () => { projectCore._onChanged().catch(() => {}); };
+        app.app.eventManager.on("premiereProjectChanged", handler);
+        cleanups.push(() => {
+          try {
+            const off = app.app.eventManager.off || app.app.eventManager.removeListener;
+            if (typeof off === "function") off("premiereProjectChanged", handler);
+          } catch (e) {
+            console.warn("[project] unbind premiereProjectChanged failed", e);
+          }
+        });
         return true;
       } catch (e) {
         console.warn("bind premiereProjectChanged failed", e);
@@ -150,9 +165,16 @@ export type ProjectCore = typeof projectCore;
     }
     if (app?.Project?.onActiveProjectChange) {
       try {
-        app.Project.onActiveProjectChange(() =>
-          projectCore._onChanged().catch(() => {}),
-        );
+        const handler = () => { projectCore._onChanged().catch(() => {}); };
+        app.Project.onActiveProjectChange(handler);
+        cleanups.push(() => {
+          try {
+            const off = app.Project.offActiveProjectChange || app.Project.removeActiveProjectChangeListener;
+            if (typeof off === "function") off(handler);
+          } catch (e) {
+            console.warn("[project] unbind onActiveProjectChange failed", e);
+          }
+        });
         return true;
       } catch (e) {
         console.warn("bind onActiveProjectChange failed", e);
@@ -160,10 +182,20 @@ export type ProjectCore = typeof projectCore;
     }
     return false;
   };
-  if (!tryBind()) {
-    // 兜底：每 2s 探测一次
-    setInterval(() => {
+
+  if (!tryEventBind()) {
+    // 兜底：每 2s 探测一次，提供 cleanup
+    const id = setInterval(() => {
       projectCore._onChanged().catch(() => {});
     }, 2000);
+    cleanups.push(() => clearInterval(id));
   }
-})();
+
+  return () => {
+    if (cleaned) return;
+    cleaned = true;
+    for (const c of cleanups) {
+      try { c(); } catch (e) { console.warn("[project] cleanup error", e); }
+    }
+  };
+}

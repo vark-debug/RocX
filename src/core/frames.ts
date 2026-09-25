@@ -13,7 +13,7 @@ import { premierepro, uxp } from "../globals";
 import { filesCore, getFs } from "./files";
 import { uploadCore } from "./ai/upload";
 import { storage } from "./storage";
-import type { ReferenceItem } from "./messages";
+import type { ReferenceItem } from "@shared/messages";
 
 function safeStr(v: any): string {
   if (v == null) return "";

@@ -5,7 +5,7 @@ import type {
   MiniMaxRatio,
   MiniMaxResolution,
   MiniMaxParamConstraints,
-} from "../services/messages";
+} from "@shared/messages";
 
 const props = defineProps<{
   prompt: string;

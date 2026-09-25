@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import { runAction, uxp, uxpSetup } from "vite-uxp-plugin";
 import vue from "@vitejs/plugin-vue"; 
+import path from "path";
 
 import { config } from "./uxp.config";
 
@@ -41,4 +42,14 @@ export default defineConfig({
     },
   },
   publicDir: "public",
+  resolve: {
+    alias: {
+      "@shared": path.resolve(__dirname, "shared"),
+    },
+  },
+  define: {
+    __ROCX_DRY_RUN__: JSON.stringify(process.env.ROCX_DRY_RUN === "1"),
+    // 开发模式开关：仅 MODE=dev 时暴露调试工具
+    __ROCX_DEV__: JSON.stringify(mode === "dev"),
+  },
 });

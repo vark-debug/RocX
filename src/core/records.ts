@@ -4,7 +4,7 @@
  * 降级：插件数据目录（path hash 命名）
  */
 import { uxp } from "../globals";
-import type { ProjectRecords } from "./messages";
+import type { ProjectRecords } from "@shared/messages";
 import { projectCore } from "./project";
 
 const FILENAME_SUFFIX = ".ai-gen.json";

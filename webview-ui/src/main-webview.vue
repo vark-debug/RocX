@@ -1,4 +1,7 @@
 <script setup lang="ts">
+// ---- 构建时常量：dry-run 调试开关（由 vite.config.ts 的 define 注入） ----
+declare const __ROCX_DRY_RUN__: boolean;
+
 // ---- 轻量 toast：UXP webview 不可依赖原生 alert ----
 import { ref as _toastRef } from "vue";
 const toastMsg = _toastRef("");
@@ -40,7 +43,7 @@ import {
   type ReferenceItem,
   type FileKind,
   type ProjectRecords,
-} from "./services/messages";
+} from "@shared/messages";
 
 import PromptInput from "./components/PromptInput.vue";
 import ReferenceList from "./components/ReferenceList.vue";
@@ -453,7 +456,7 @@ async function submitGenerate() {
       resolution: resolution.value,
       references: newRec.references,
     };
-    if (dryRun.value) {
+    if (__ROCX_DRY_RUN__) {
       // 调试模式：仅打印请求，不实际发送
       const { task_id, payload } = await mini.createVideoDryRun(reqPayload);
       const idx = records.value.findIndex((r) => r.id === id);
@@ -819,12 +822,6 @@ function onSettingsSave(key: string) {
   apiKey.value = key;
   settingsOpen.value = false;
 }
-
-// 默认实发（dry-run 仅调试用，可在设置面板开启；此前默认 true 会导致“正常生成”静默不发）
-const dryRun = ref<boolean>(false);
-function onDryRunChange(v: boolean) {
-  dryRun.value = v;
-}
 </script>
 
 <template>
@@ -844,9 +841,7 @@ function onDryRunChange(v: boolean) {
     <SettingsPanel
       v-if="settingsOpen"
       :initial-key="apiKey || ''"
-      :initial-dry-run="dryRun"
       @save="onSettingsSave"
-      @update:dryRun="onDryRunChange"
     />
 
     <!-- 参考素材列表已并入浮动窗口 -->

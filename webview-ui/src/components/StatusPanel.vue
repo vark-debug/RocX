@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount, watch } from "vue";
-import type { GenerationRecord } from "../services/messages";
+import type { GenerationRecord } from "@shared/messages";
 
 const props = defineProps<{
   generating: GenerationRecord | null;

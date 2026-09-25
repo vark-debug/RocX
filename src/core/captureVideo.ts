@@ -12,7 +12,7 @@ import { premierepro, uxp } from "../globals";
 import { filesCore } from "./files";
 import { uploadCore } from "./ai/upload";
 import { storage } from "./storage";
-import type { ReferenceItem } from "./messages";
+import type { ReferenceItem } from "@shared/messages";
 
 async function arrayBufferToBase64(ab: ArrayBuffer): Promise<string> {
   const bytes = new Uint8Array(ab);
@@ -274,8 +274,13 @@ export const captureVideoCore = {
 
   /**
    * 抓取当前序列工作区 → 导出视频 → 上传 MiniMax → 返回 ReferenceItem
+   *
+   * 注意：此方法已废弃，被两阶段流程取代：
+   *   captureWorkAreaOnlyAsReference() + uploadReferenceFile()
+   * 保留仅为历史兼容。Webview 业务代码已不再调用。
+   * （早期实现依赖未定义的 getExportFolder；如需恢复请重新实现。）
    */
-  async captureWorkAreaAndUploadAsReference(opts: {
+  async captureWorkAreaAndUploadAsReference(_opts: {
     exportFull?: boolean;
   } = {}): Promise<{
     ok: boolean;
@@ -285,134 +290,10 @@ export const captureVideoCore = {
     durationSec?: number;
     error?: string;
   }> {
-    console.log("[captureVideo] start", opts);
-    try {
-      const project = await premierepro.Project.getActiveProject();
-      if (!project) return { ok: false, error: "无活动项目" };
-      const sequence = await project.getActiveSequence();
-      if (!sequence) return { ok: false, error: "无活动序列" };
-
-      // in/out 时间
-      let inSec = 0;
-      let outSec = 0;
-      try {
-        const inPt = await sequence.getInPoint();
-        const outPt = await sequence.getOutPoint();
-        inSec = inPt?.seconds ?? 0;
-        outSec = outPt?.seconds ?? 0;
-        console.log(`[captureVideo] in/out: ${inSec.toFixed(2)}s - ${outSec.toFixed(2)}s`);
-      } catch (e) {
-        console.warn("[captureVideo] getIn/OutPoint failed", e);
-      }
-      const durationSec = Math.max(0, outSec - inSec);
-      if (durationSec <= 0) {
-        return {
-          ok: false,
-          error:
-            "工作区 in/out 无效。请在 PR 中用 I / O 键设置工作区（默认导出整个序列时通常无问题）。",
-          inSec,
-          outSec,
-          durationSec,
-        };
-      }
-
-      const exportFolder = await getExportFolder();
-      if (!exportFolder) return { ok: false, error: "未选择导出目录" };
-      const exportFolderPath = exportFolder.nativePath;
-
-      const filename = `clip-${Date.now()}.mp4`;
-      const separator = exportFolderPath.includes("\\") ? "\\" : "/";
-      const outputPath = exportFolderPath + separator + filename;
-
-      const encoder: any = await (premierepro as any).EncoderManager.getManager();
-      const presetFile = await getPresetFile();
-      const presetPath = presetFile?.nativePath;
-
-      console.log("[captureVideo] calling encoder.exportSequence...");
-      console.log("  output:", outputPath);
-      console.log("  preset:", presetPath || "(none)");
-      console.log("  exportFull:", !!opts.exportFull);
-
-      const ok = await encoder.exportSequence(
-        sequence,
-        (premierepro as any).Constants.ExportType.IMMEDIATELY,
-        outputPath,
-        presetPath,
-        !!opts.exportFull,
-      );
-      console.log("[captureVideo] exportSequence returned:", ok);
-      if (!ok) {
-        return {
-          ok: false,
-          error: presetPath
-            ? "导出失败（encoder.exportSequence 返回 false），请检查 preset 是否适配当前序列"
-            : "导出失败（encoder.exportSequence 返回 false）。",
-          inSec,
-          outSec,
-          durationSec,
-        };
-      }
-
-      // 找实际写出的文件
-      const found = await findExportByName(exportFolder, filename);
-      if (!found) {
-        return {
-          ok: false,
-          error: `导出报成功但目录里没找到 ${filename}。检查目录: ${exportFolderPath}`,
-          inSec,
-          outSec,
-          durationSec,
-        };
-      }
-      const actualPath = exportFolderPath + separator + found.name;
-      console.log("[captureVideo] actual file:", actualPath);
-
-      // 读成 data URL
-      let dataUrl: string | undefined;
-      try {
-        const ab = await found.entry.read({ format: (uxp.storage as any).formats.binary });
-        if (ab) {
-          const b64 = await arrayBufferToBase64(ab);
-          dataUrl = `data:video/mp4;base64,${b64}`;
-        }
-      } catch (e) {
-        console.warn("[captureVideo] read for dataUrl failed", e);
-      }
-
-      // 上传到 MiniMax
-      const apiKey = await storage.getApiKey();
-      if (!apiKey) {
-        return { ok: false, error: "未配置 MiniMax API Key" };
-      }
-      const up = await uploadCore.uploadFile({
-        apiKey,
-        fileToken: found.entry,
-        fileName: found.name,
-      });
-      if (!up.ok || !up.fileId) {
-        return { ok: false, error: `上传失败: ${up.error}`, inSec, outSec, durationSec };
-      }
-
-      const ref: ReferenceItem = {
-        type: "reference_video",
-        localPath: actualPath,
-        fileId: up.fileId,
-        uploadedAt: new Date().toISOString(),
-        fileName: found.name,
-        sizeBytes: found.entry.size || 0,
-        durationSec,
-        thumbDataUrl: dataUrl,
-      };
-      return {
-        ok: true,
-        reference: ref,
-        inSec,
-        outSec,
-        durationSec,
-      };
-    } catch (e: any) {
-      console.error("[captureVideo] EXCEPTION:", e);
-      return { ok: false, error: safeStr(e?.message || e) };
-    }
+    return {
+      ok: false,
+      error:
+        "captureWorkAreaAndUploadAsReference 已废弃，请改用 captureWorkAreaOnlyAsReference + uploadReferenceFile 两阶段流程",
+    };
   },
 };

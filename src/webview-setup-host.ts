@@ -5,11 +5,11 @@
 import * as Comlink from "comlink";
 import { api } from "./api/api";
 
-import type { WebviewAPI } from "../webview-ui/src/webview";
+import type { WebviewToUxPAPI } from "../webview-ui/src/webview";
 import { config } from "../uxp.config";
 import { getColorScheme } from "./api/uxp";
 import { uxp } from "./globals";
-import { projectCore } from "./core/project";
+import { projectCore, setupProjectWatchers } from "./core/project";
 
 interface UXPHTMLWebViewElement extends HTMLElement {
   uxpAllowInspector: string;
@@ -19,10 +19,11 @@ interface UXPHTMLWebViewElement extends HTMLElement {
 
 export const webviewInitHost = (params: {
   multi: boolean | string[];
-}): Promise<WebviewAPI[]> => {
+}): Promise<WebviewToUxPAPI[]> => {
   const multi = params ? params.multi : false;
   const id = uxp.entrypoints._pluginInfo.id;
   return new Promise((resolve, reject) => {
+    let cleanupWatchers: (() => void) | null = null;
     let pages = ["main"];
     if (multi === true || Array.isArray(multi)) {
       pages = config.manifest.entrypoints.map(
@@ -31,7 +32,7 @@ export const webviewInitHost = (params: {
       console.log("webviewInitHost multi pages", pages);
     }
     console.log("setup webview for", pages);
-    let apis: WebviewAPI[] = [];
+    let apis: WebviewToUxPAPI[] = [];
     pages.map((page, i) => {
       let webview = document.createElement("webview") as UXPHTMLWebViewElement;
       webview.className = "webview-ui";
@@ -82,7 +83,7 @@ export const webviewInitHost = (params: {
 
         const endpoint = Comlink.windowEndpoint(backendEndpoint);
         //@ts-ignore
-        const comlinkAPI = Comlink.wrap(endpoint) as WebviewAPI;
+        const comlinkAPI = Comlink.wrap(endpoint) as WebviewToUxPAPI;
         apis.push(comlinkAPI);
 
         Comlink.expose(
@@ -110,6 +111,8 @@ export const webviewInitHost = (params: {
           });
           // 启动期首次推送
           projectCore.emitInitial().catch((e) => console.warn(e));
+          // 新增：显式启动 watcher 并保留 cleanup
+          cleanupWatchers = setupProjectWatchers();
           resolve(apis);
         }
       };
