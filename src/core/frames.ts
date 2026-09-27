@@ -132,23 +132,30 @@ export const framesCore = {
 
       // 用 Folder token 列出条目，找到 capture-* 最新的那个
       // （不依赖 Adobe 25.3 给 .png/.jpg 加后缀的命名 bug）
+      // Windows 上 exportSequenceFrame 返回 true 后文件未必立即可见（写盘延迟），
+      // 短轮询兜底，最多 ~1.5s（macOS 同步写盘，几乎立即命中）
       let actualFile: any = null;
       let actualName: string | null = null;
-      try {
-        const entries: any[] = (await exportFolder.getEntries()) || [];
-        const captureFiles = entries
-          .filter((e: any) => !e.isFolder && /^capture-\d+\./.test(e.name))
-          .sort((a: any, b: any) => {
-            const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
-            const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
-            return tb - ta;
-          });
-        if (captureFiles.length > 0) {
-          actualFile = captureFiles[0];
-          actualName = captureFiles[0].name;
+      const startTs = Date.now();
+      while (Date.now() - startTs < 1500) {
+        try {
+          const entries: any[] = (await exportFolder.getEntries()) || [];
+          const captureFiles = entries
+            .filter((e: any) => !e.isFolder && /^capture-\d+\./.test(e.name))
+            .sort((a: any, b: any) => {
+              const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
+              const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
+              return tb - ta;
+            });
+          if (captureFiles.length > 0) {
+            actualFile = captureFiles[0];
+            actualName = captureFiles[0].name;
+            break;
+          }
+        } catch (e) {
+          console.warn("[frames] list entries failed", e);
         }
-      } catch (e) {
-        console.warn("[frames] list entries failed", e);
+        await new Promise((r) => setTimeout(r, 100));
       }
       if (!actualFile || !actualName) {
         return {
@@ -323,24 +330,31 @@ export const framesCore = {
 
       // 用 Folder token 列出条目，找到 capture-* 最新的那个
       // （不依赖 Adobe 25.3 给 .png/.jpg 加后缀的命名 bug）
+      // Windows 上 exportSequenceFrame 返回 true 后文件未必立即可见（写盘延迟），
+      // 短轮询兜底，最多 ~1.5s（macOS 同步写盘，几乎立即命中）
       let actualFile: any = null;
       let actualName: string | null = null;
-      try {
-        const entries: any[] = (await exportFolder.getEntries()) || [];
-        const captureFiles = entries
-          .filter((e) => !e.isFolder && /^capture-\d+\./.test(e.name))
-          .sort((a, b) => {
-            // 文件名 capture-<timestamp>.<ext>，timestamp 越大越新
-            const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
-            const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
-            return tb - ta;
-          });
-        if (captureFiles.length > 0) {
-          actualFile = captureFiles[0];
-          actualName = actualFile.name;
+      const startTs = Date.now();
+      while (Date.now() - startTs < 1500) {
+        try {
+          const entries: any[] = (await exportFolder.getEntries()) || [];
+          const captureFiles = entries
+            .filter((e) => !e.isFolder && /^capture-\d+\./.test(e.name))
+            .sort((a, b) => {
+              // 文件名 capture-<timestamp>.<ext>，timestamp 越大越新
+              const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
+              const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
+              return tb - ta;
+            });
+          if (captureFiles.length > 0) {
+            actualFile = captureFiles[0];
+            actualName = actualFile.name;
+            break;
+          }
+        } catch (e: any) {
+          console.warn("[frames] list/parse entries failed", e?.message);
         }
-      } catch (e: any) {
-        console.warn("[frames] list/parse entries failed", e?.message);
+        await new Promise((r) => setTimeout(r, 100));
       }
       if (!actualFile || !actualName) {
         return {

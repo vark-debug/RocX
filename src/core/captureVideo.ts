@@ -102,6 +102,8 @@ export const captureVideoCore = {
     inSec?: number;
     outSec?: number;
     durationSec?: number;
+    width?: number;
+    height?: number;
     error?: string;
   }> {
     console.log("[captureVideo] captureWorkAreaOnlyAsReference start", opts);
@@ -110,6 +112,26 @@ export const captureVideoCore = {
       if (!project) return { ok: false, error: "无活动项目" };
       const sequence = await project.getActiveSequence();
       if (!sequence) return { ok: false, error: "无活动序列" };
+
+      // 取序列帧尺寸（用于按比例自动填写）
+      let width: number | undefined;
+      let height: number | undefined;
+      try {
+        const frameSize: any = await (sequence as any).getFrameSize?.();
+        if (frameSize) {
+          if (typeof frameSize.width === "number") width = Math.round(frameSize.width);
+          else if (typeof frameSize.right === "number" && typeof frameSize.left === "number") {
+            width = Math.round(frameSize.right - frameSize.left);
+          }
+          if (typeof frameSize.height === "number") height = Math.round(frameSize.height);
+          else if (typeof frameSize.bottom === "number" && typeof frameSize.top === "number") {
+            height = Math.round(frameSize.bottom - frameSize.top);
+          }
+        }
+      } catch (e) {
+        console.warn("[captureVideo] getFrameSize failed", e);
+      }
+      console.log("[captureVideo] frame size:", width, "x", height);
 
       let inSec = 0;
       let outSec = 0;
@@ -151,13 +173,38 @@ export const captureVideoCore = {
       const presetPath = presetFile?.nativePath;
 
       console.log("[captureVideo] calling encoder.exportSequence...");
-      const ok = await encoder.exportSequence(
-        sequence,
-        (premierepro as any).Constants.ExportType.IMMEDIATELY,
-        outputPath,
-        presetPath,
-        !!opts.exportFull,
-      );
+      let ok = false;
+      try {
+        ok = await encoder.exportSequence(
+          sequence,
+          (premierepro as any).Constants.ExportType.IMMEDIATELY,
+          outputPath,
+          presetPath,
+          !!opts.exportFull,
+        );
+      } catch (e: any) {
+        // UXP 在 AME 未安装时直接抛 "Internal error : AME is not installed"，
+        // 原文对用户不友好，翻译成明确的安装引导
+        const msg = safeStr((e as any)?.message || e);
+        console.warn("[captureVideo] exportSequence threw:", msg);
+        if (/AME is not installed/i.test(msg)) {
+          return {
+            ok: false,
+            error:
+              "抓视频失败：Adobe Media Encoder (AME) 未安装。EncoderManager 依赖 AME。请安装 AME 后重试（PR 安装包通常会带，可通过 Creative Cloud 单独安装）。",
+            inSec,
+            outSec,
+            durationSec,
+          };
+        }
+        return {
+          ok: false,
+          error: `抓视频失败: ${msg}`,
+          inSec,
+          outSec,
+          durationSec,
+        };
+      }
       console.log("[captureVideo] exportSequence returned:", ok);
       if (!ok) {
         return {
@@ -210,6 +257,8 @@ export const captureVideoCore = {
         inSec,
         outSec,
         durationSec,
+        width,
+        height,
       };
     } catch (e: any) {
       console.error("[captureVideo] captureOnly EXCEPTION:", e);

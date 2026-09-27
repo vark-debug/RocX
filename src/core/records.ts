@@ -23,7 +23,11 @@ function hashPath(p: string): string {
 function pathToFileUrl(p: string): string {
   if (p.startsWith("file://")) return p;
   // UXP getEntryWithUrl 内部自行百分号编码；预编码（含空格->%20）会被二次编码导致找不到
-  return "file://" + p;
+  // Windows 绝对路径（"C:\..."）需要三斜杠 file:///C:/...；同时 UXP 在 Windows 上
+  // project.path 常带 "\\?\" 扩展长度前缀，需先剥离再拼（macOS 以 / 开头天然三斜杠）
+  const normalized = /^\\\\\?\\/.test(p) ? p.slice(4) : p;
+  if (/^[A-Za-z]:[\\/]/.test(normalized)) return "file:///" + normalized;
+  return "file://" + normalized;
 }
 
 function getFs(): any {
@@ -34,8 +38,14 @@ function buildPrimaryPath(projectPath: string, projectName: string): {
   url: string;
   filename: string;
 } {
-  const sep = "/";
-  const idx = projectPath.lastIndexOf(sep);
+  // 路径分隔符：优先找 /（macOS / POSIX 风格），找不到再找 \（Windows 风格）；
+  // project.path 在 Windows 上常带 "\\?\" 前缀且无 /，必须用 \ 切分
+  let idx = projectPath.lastIndexOf("/");
+  let sep = "/";
+  if (idx < 0) {
+    idx = projectPath.lastIndexOf("\\");
+    sep = "\\";
+  }
   const dir = idx >= 0 ? projectPath.slice(0, idx) : projectPath;
   const safeName = projectName.replace(/[\\/:*?"<>|]/g, "_");
   return {
@@ -51,7 +61,8 @@ async function tryWriteToPrimary(
 ): Promise<{ ok: boolean; error?: string }> {
   if (!projectPath) return { ok: false, error: "项目未保存（path 为空）" };
   try {
-    const { url } = buildPrimaryPath(projectPath, projectName);
+    const { url, filename } = buildPrimaryPath(projectPath, projectName);
+    console.log(`[records] tryWriteToPrimary url=${url} filename=${filename}`);
     const fs = getFs();
     let entry: any;
     try {
@@ -64,8 +75,10 @@ async function tryWriteToPrimary(
     }
     const json = JSON.stringify(data, null, 2);
     await entry.write(json);
+    console.log(`[records] tryWriteToPrimary 写盘成功`);
     return { ok: true };
   } catch (e: any) {
+    console.warn(`[records] tryWriteToPrimary 失败: ${String(e?.message || e)}`);
     return { ok: false, error: String(e?.message || e) };
   }
 }
