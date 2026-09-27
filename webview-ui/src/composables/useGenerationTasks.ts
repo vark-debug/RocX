@@ -210,6 +210,15 @@ export function useGenerationTasks(opts: {
     };
     opts.records.value.unshift(newRec);
     opts.prompt.value = "";
+    // 一次提交 = 一次完整的输入清空:参考素材 UI 同步置空,
+    // 避免下一轮生成误带上本次的参考图/参考视频。
+    // 磁盘上的原始文件不受影响(本地路径由 UXP 端管理)。
+    opts.references.value = [];
+    // 提交成功后 ratio=adaptive 在无 references 时不合法,自动回退到 16:9,
+    // 让用户在继续输入 prompt 后「生成」按钮可立即可点。
+    if (opts.ratio.value === "adaptive") {
+      opts.ratio.value = "16:9";
+    }
 
     try {
       const mini = new MiniMaxAPI(opts.apiKey.value);

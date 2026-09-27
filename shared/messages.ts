@@ -44,6 +44,8 @@ export interface ReferenceItem {
   thumbDataUrl?: string;
   /** webview 端标记：是否正在上传（UI 用，不持久化到磁盘） */
   uploading?: boolean;
+  /** webview 端标记：是否已被某次生成提交消费；用于清空状态列显示（UI 用，不持久化到磁盘） */
+  consumed?: boolean;
 }
 
 export interface GenerationRecord {
