@@ -31,7 +31,13 @@ function pathToFileUrl(p: string): string {
   if (p.startsWith("file://")) return p;
   // 注意：UXP getEntryWithUrl/createEntryWithUrl 内部会自行做百分号编码，
   // 这里必须传未编码原始路径；预编码会被二次编码（% -> %25）导致找不到路径
-  return "file://" + p;
+  // Windows 绝对路径形如 "C:\..."，必须用 file:///C:/...（三斜杠），
+  // 否则 UXP 会把 "C:" 当作 host 之前的部分而解析失败（macOS 以 / 开头天然三斜杠，无需处理）
+  // Windows 上 UXP 的 project.path 常带 "\\?\" 扩展长度前缀，需先去掉再拼 URL；
+  // 不去的话 UXP 会把 "\\?\C:\" 当 host 处理，找不到条目（macOS 不存在此前缀）
+  const normalized = /^\\\\\?\\/.test(p) ? p.slice(4) : p;
+  if (/^[A-Za-z]:[\\/]/.test(normalized)) return "file:///" + normalized;
+  return "file://" + normalized;
 }
 
 function getFs(): any {
