@@ -138,8 +138,11 @@ export const timelineCore = {
       let txError: any = null;
 
       try {
-        await project.lockedAccess(async () => {
-          await project.executeTransaction(async (compoundAction: any) => {
+        // 25.6 兼容：lockedAccess / executeTransaction 内不再用 async
+        // （Adobe 官方 ESLint 规则 no-async-in-lock-scope 建议锁定回调内同步执行；
+        // lockedAccess 本身仍是 Promise，外层 await 保留即可）
+        await project.lockedAccess(() => {
+          project.executeTransaction((compoundAction: any) => {
             for (const f of found) {
               try {
                 const action = editor.createOverwriteItemAction(

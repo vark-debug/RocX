@@ -6,7 +6,7 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 软件 | Adobe Premiere Pro **26.5.0 或更高版本** |
+| 软件 | Adobe Premiere Pro **25.6.0 或更高版本** |
 | 操作系统 | **macOS**（开发与验证环境）；Windows 理论上可用但**未做验证**，遇到问题欢迎反馈 |
 | 安装方式 | UXP 插件（CCX 包，manifest v6） |
 | 网络 | 可访问 MiniMax 服务：`api.minimax.cn`、`cdn.hailuoai.com` 及阿里云 OSS 产物下载域名 |
@@ -25,10 +25,27 @@
 | `Exporter.exportSequenceFrame`（抓帧） | 25.6 |
 | `EncoderManager.getManager` / `exportSequence`（抓视频） | 25.6 |
 
-即插件**没有使用任何 26.5 才新增的 API**（26.5 新增的 `C2PAService`、`MediaManager`、`WorkAreaUtils`、`Media.getStart/getDuration` 等均未使用）。要求 26.5.0 的原因：
+即插件**没有使用任何 26.5 才新增的 API**（26.5 新增的 `C2PAService`、`MediaManager`、`WorkAreaUtils`、`Media.getStart/getDuration` 等均未使用），也未使用任何 26.3 才强制的语法特性（如 `create*Action` 在 `lockedAccess` 内的硬性约束），因此理论上可在 **Premiere 25.6 / 26.0 / 26.2 / 26.3 / 26.5** 全系 UXP 8.x 上运行。要求 25.6.0 的原因：
 
-- 插件 manifest 采用 manifestVersion 6，UI 由 WebView 承载，`allowLocalRendering` 需 UXP 8.0+（官方版本对照：Premiere 26.0.2 起集成 UXP 8.1）
-- 26.5 为当前开发与实测验证的基线版本，更低版本未做测试
+- 插件 manifest 采用 manifestVersion 6，UI 由 WebView 承载，`allowLocalRendering` 需 UXP 8.0+（官方版本对照：Premiere 26.0.2 起集成 UXP 8.1；Premiere 25.6 自带 UXP 8.1）
+- 25.6 为官方 UXP for Premiere 的**正式首发版本**（[Adobe Changelog](https://developer.adobe.com/premiere-pro/uxp/changelog/)）；26.5 为开发与实测验证的基线版本，更低版本未做测试
+
+### 关于 Adobe UXP 版本对照（自核验）
+
+| Premiere 版本 | 内置 UXP 版本 | 引用 |
+| --- | --- | --- |
+| 25.6 | UXP 8.1 | [Adobe Host Environment 文档](https://developer.adobe.com/premiere-pro/uxp/resources/recipes/host-info/) |
+| 26.5 | UXP 8.x | [Adobe Changelog](https://developer.adobe.com/premiere-pro/uxp/changelog/) |
+
+### 类型包说明
+
+`@adobe/premierepro` npm 类型包**最低版本是 26.2.0**（官方未发布 25.6.0 类型包）；本项目保留使用 `@adobe/premierepro@26.5.0` 作为构建时类型参考，但 manifest 的 `host.minVersion` 仍为 25.6.0 —— 运行时实际依赖的 DOM API 全部在 25.6 已可用（参见上表）。
+
+### Action 锁规范（25.6 / 26.3 通用）
+
+- `lockedAccess` 回调内**不再使用 async**（Adobe 官方 ESLint 规则 [`no-async-in-lock-scope`](https://github.com/adobe/eslint-plugin-premierepro/blob/main/docs/rules/no-async-in-lock-scope.md)）
+- 所有 `create*Action` 在 `executeTransaction` 内同步创建并通过 `compoundAction.addAction` 提交
+- 26.3 才强制的"`create*Action` 必须在 `lockedAccess` 内创建"在 25.6 上**已默认满足**（本项目一直用 `lockedAccess(executeTransaction(...))` 嵌套结构）
 
 ## 安装
 

@@ -1,5 +1,26 @@
 # RocX Changelog
 
+## v0.1.1 (2026-09-25)
+
+向下兼容到 **25.6.0**（官方 UXP for Premiere 正式首发版本；UXP 8.1）。
+
+### 兼容性
+
+- `manifest.host.minVersion` 由 `26.5.0` 调为 `25.6.0`
+- 时间线插入的 `lockedAccess` / `executeTransaction` 回调去掉 `async/await`（Adobe 官方 ESLint 规则 `no-async-in-lock-scope` 建议锁定回调内同步执行；外层 `await project.lockedAccess` 保留）
+- README 同步说明 25.6 → 26.5 全系 UXP 8.x 可运行
+- 仍使用 `@adobe/premierepro@26.5.0` 作为构建时类型参考（Adobe 官方 npm 类型包最低 26.2.0，未发布 25.6.0 类型包）
+
+### 已审计确认
+
+- 未引用任何 26.5 独有 API（`C2PAService` / `MediaManager` / `WorkAreaUtils` / `Media.getStart` / `Media.getDuration` / `host.applicationPath` / `host.getBackgroundColor` 等均未使用）
+- `Sequence.setSelection` 同步化（26.3 引入）不影响本项目（本项目未调用 `setSelection`）
+- 项目切换监听已有 `eventManager.on` → `Project.onActiveProjectChange` → `setInterval` 三级兜底；25.6 上前两者为 undefined，自动落到 2s 轮询
+
+### 未做
+
+- ESLint / `eslint-plugin-premierepro` 未接入（与兼容性目标无关，会引入 eslint v9 + typescript-eslint v8 共 50+ 间接依赖，超出本次范围）。建议后续单独 PR 处理
+
 ## v0.1.0 (2026-09-25)
 
 首个公开版本。在 Adobe Premiere Pro 26.5+ 面板内调用 MiniMax（海螺 AI）视频生成模型。

@@ -22,7 +22,7 @@ const manifest: UXP_Manifest = {
   host: [
     {
       app: "premierepro",
-      minVersion: "26.5.0",
+      minVersion: "25.6.0",
     },
   ],
   entrypoints: [
