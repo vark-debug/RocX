@@ -11,6 +11,7 @@
 | 安装方式 | UXP 插件（CCX 包，manifest v6） |
 | 网络 | 可访问 MiniMax 服务：`api.minimax.cn`、`cdn.hailuoai.com` 及阿里云 OSS 产物下载域名 |
 | 账号 | **MiniMax 官方开放平台**签发的 API Key（插件直接调用官方素材上传接口，第三方中转 Key 不可用） |
+| 抓视频依赖 | **Adobe Media Encoder（AME）必须已安装并能正常启动**：抓视频基于 Premiere UXP 的 [`EncoderManager.exportSequence`](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/encodermanager)，按官方文档说明，该 API 的转码由 AME 后台执行（`exportType` 含 `QUEUE_TO_AME`，事件如 `EVENT_RENDER_COMPLETE / ERROR / PROGRESS` 也由 AME 广播）；`EncoderManager` 还提供了 `isAMEInstalled` 属性用于检测。**Win / Mac 若仅装 Premiere 而未装 / 未授权 AME，抓视频将无法完成**；抓帧（基于 `Exporter.exportSequenceFrame`）不受此影响 |
 
 ### 版本要求说明
 
@@ -51,7 +52,7 @@
 点击素材列表上方的按钮添加，均为当前项目的参考输入：
 
 - **抓帧**：把节目监视器当前画面截为参考图
-- **抓视频**：把工作区栏范围内的视频段作为参考视频（自动读取时长；若超过当前模型最大时长档，会提示并自动按最大档生成，流程继续）
+- **抓视频**：把工作区栏范围内的视频段作为参考视频（自动读取时长；若超过当前模型最大时长档，会提示并自动按最大档生成，流程继续）。该能力依赖 **Adobe Media Encoder (AME)**：插件通过 [`EncoderManager.exportSequence`](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/encodermanager) 触发导出，按官方文档转码由 AME 后台执行；请确保本机已安装并能正常启动 AME（Win 用户尤其注意：仅装 Premiere 不一定会带 AME），否则抓视频将无法完成。可用 `EncoderManager.isAMEInstalled` 在代码侧检测。
 
 ### 3. 生成视频
 
