@@ -6,8 +6,8 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 软件 | Adobe Premiere Pro **25.6.0 或更高版本** |
-| 操作系统 | **macOS**（开发与验证环境）；Windows 理论上可用但**未做验证**，遇到问题欢迎反馈 |
+| 软件 | Adobe Premiere Pro **25.6.4 或更高版本** |
+| 操作系统 | **Windows** 与 **macOS**（v0.2.0 起双平台全量验证） |
 | 安装方式 | UXP 插件（CCX 包，manifest v6） |
 | 网络 | 可访问 MiniMax 服务：`api.minimax.cn`、`cdn.hailuoai.com` 及阿里云 OSS 产物下载域名 |
 | 账号 | **MiniMax 官方开放平台**签发的 API Key（插件直接调用官方素材上传接口，第三方中转 Key 不可用） |
@@ -29,7 +29,7 @@
 即插件**没有使用任何 26.5 才新增的 API**（26.5 新增的 `C2PAService`、`MediaManager`、`WorkAreaUtils`、`Media.getStart/getDuration` 等均未使用），也未使用任何 26.3 才强制的语法特性（如 `create*Action` 在 `lockedAccess` 内的硬性约束），因此理论上可在 **Premiere 25.6 / 26.0 / 26.2 / 26.3 / 26.5** 全系 UXP 8.x 上运行。要求 25.6.0 的原因：
 
 - 插件 manifest 采用 manifestVersion 6，UI 由 WebView 承载，`allowLocalRendering` 需 UXP 8.0+（官方版本对照：Premiere 26.0.2 起集成 UXP 8.1；Premiere 25.6 自带 UXP 8.1）
-- 25.6 为官方 UXP for Premiere 的**正式首发版本**（[Adobe Changelog](https://developer.adobe.com/premiere-pro/uxp/changelog/)）；26.5 为开发与实测验证的基线版本，更低版本未做测试
+- 25.6 为官方 UXP for Premiere 的**正式首发版本**（[Adobe Changelog](https://developer.adobe.com/premiere-pro/uxp/changelog/)）；v0.2.0 已在 **Premiere 25.6.4 / 26.x + Windows / macOS** 双平台完成全流程验证
 
 ### 关于 Adobe UXP 版本对照（自核验）
 

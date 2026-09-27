@@ -1,5 +1,30 @@
 # RocX Changelog
 
+## v0.2.0 (2026-09-27)
+
+首个 **Windows + macOS 双平台全量验证**版本。向下兼容到 **Premiere Pro 25.6.4**，已在 Win / Mac 双平台完成全流程验证。
+
+### 跨平台兼容
+
+- **Windows 兼容修复**
+  - `file://` 三斜杠路径统一处理
+  - 剥离 `\\?\` 长路径前缀，避免 UXP 文件 API 在 Win 下拒绝访问
+  - 抓帧写盘改为轮询确认，规避 Win 下写入延迟导致的"文件未就绪"误报
+  - Adobe Media Encoder（AME）缺失 / 启动失败时给出明确错误提示（Win 下仅装 Premiere 不一定带 AME）
+- 兼容性下限确认到 **Premiere Pro 25.6.4**（UXP 8.1），25.6 / 26.x 全系可运行
+
+### 功能
+
+- 提交生成后自动清空参考素材列表（一次提交 = 一次完整输入清空，避免上一轮参考图 / 参考视频误带入下一轮生成；磁盘原始文件保留）
+- 抓视频时按素材实际宽高比自动匹配并填写画面比例（provider 中性，按当前模型合法 ratio 列表取最接近值）
+
+### 架构改进
+
+- **provider 模块化抽象层**：抽出 `VideoGenProvider` / `ModelDescriptor` / registry，UI 改为按 `capabilities` 能力位驱动（`videoGeneration` / `promptOptimization` / `resolutionUpscale` 等），不再硬编码 MiniMax 模型名
+- **webview-ui composable 拆分**：`main-webview.vue` 拆出 `useGenerationState` / `useReferences` / `useGenerationTasks`，参考素材、轮询、记录等关注点分离
+- 移除大视频预览首帧遮罩（`mainFrameBlob` 与 canvas 抽帧遮罩 全部删除），预览逻辑简化
+- 跨端类型收口 `shared/messages.ts`，新增 `ReferenceItem.consumed` 状态字段
+
 ## v0.1.1 (2026-09-25)
 
 向下兼容到 **25.6.0**（官方 UXP for Premiere 正式首发版本；UXP 8.1）。
