@@ -28,10 +28,10 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:prompt": [string];
-  "update:model": [MiniMaxModel];
-  "update:ratio": [MiniMaxRatio];
+  "update:model": [string];
+  "update:ratio": [string];
   "update:duration": [number];
-  "update:resolution": [MiniMaxResolution];
+  "update:resolution": [string];
   submit: [];
   /** 用户点击了右上角 ✨ 按钮，请求调用 provider 的 promptOptimization 能力 */
   optimize: [];
@@ -47,6 +47,11 @@ const currentModelDesc = computed<ModelDescriptor | null>(
 
 /** 比例选项：从当前 model descriptor 的 paramConstraints.ratios 拿（不再硬编码） */
 const ratios = computed(() => currentModelDesc.value?.paramConstraints?.ratios ?? []);
+
+/** 过滤掉当前没参考时不该出现的 adaptive（提供给模板 v-for） */
+const filteredRatios = computed(() =>
+  ratios.value.filter((r) => props.hasReferences || r !== "adaptive"),
+);
 
 const modelLabel = computed(() => {
   const m = currentModelDesc.value;
@@ -166,7 +171,7 @@ function onOptimizeClick() {
                 type="radio"
                 :value="m.modelId"
                 :checked="model === m.modelId"
-                @change="emit('update:model', m.modelId as MiniMaxModel)"
+                @change="emit('update:model', m.modelId)"
               />
               <span>{{ m.displayName }}</span>
             </label>
@@ -180,7 +185,7 @@ function onOptimizeClick() {
           <div class="group-label">宽高比</div>
           <div class="radio-row">
             <label
-              v-for="r in ratios.filter((rr: string) => hasReferences || rr !== 'adaptive')"
+              v-for="r in filteredRatios"
               :key="r"
               class="radio-item"
               :class="{ active: ratio === r, disabled: !hasReferences && r === 'adaptive' }"
