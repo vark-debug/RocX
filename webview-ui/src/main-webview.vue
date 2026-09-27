@@ -160,16 +160,47 @@ function onSettingsSave(key: string) {
   apiKey.value = key;
   settingsOpen.value = false;
 }
+
+const refreshing = ref(false);
+async function refreshProject() {
+  if (refreshing.value) return;
+  refreshing.value = true;
+  try {
+    const pi = await bridge.queryProjectState();
+    if (pi.project) {
+      projectInfo.value = pi.project;
+      await state.loadRecords();
+    } else {
+      projectInfo.value = null;
+      records.value = [];
+    }
+  } catch (e) {
+    console.warn("[main-webview] refreshProject failed", e);
+  } finally {
+    refreshing.value = false;
+  }
+}
 </script>
 
 <template>
   <div class="ai-panel-root">
-    <!-- Header: 项目名 + 设置按钮 -->
+    <!-- Header: 项目名 + 刷新 + 设置按钮 -->
     <header class="panel-header">
-      <div class="project-name" v-if="projectInfo">
-        {{ projectInfo.name || projectInfo.path.split(/[\\/]/).pop() }}
+      <div class="project-info">
+        <div class="project-name" v-if="projectInfo">
+          {{ projectInfo.name || projectInfo.path.split(/[\\/]/).pop() }}
+        </div>
+        <div class="project-name muted" v-else>无活动项目</div>
+        <button
+          class="icon-btn"
+          :class="{ spinning: refreshing }"
+          :disabled="refreshing"
+          @click="refreshProject"
+          title="刷新当前 PR 工程（重新读取项目信息与记录）"
+        >
+          🔄
+        </button>
       </div>
-      <div class="project-name muted" v-else>无活动项目</div>
       <button class="icon-btn" @click="settingsOpen = !settingsOpen" title="设置">
         ⚙
       </button>
@@ -249,10 +280,17 @@ function onSettingsSave(key: string) {
 .panel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   padding: 6px 8px;
   border-bottom: 1px solid var(--uxp-host-border-color, #454545);
   flex-shrink: 0;
+  .project-info {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
   .project-name {
     font-weight: 500;
     overflow: hidden;
@@ -274,6 +312,20 @@ function onSettingsSave(key: string) {
   border-radius: 4px;
   &:hover {
     background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
+  }
+  &:disabled {
+    cursor: default;
+    opacity: 0.6;
+  }
+  &.spinning {
+    animation: rocx-spin 1s linear infinite;
+    display: inline-block;
+  }
+}
+
+@keyframes rocx-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

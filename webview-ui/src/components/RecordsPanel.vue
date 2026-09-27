@@ -65,7 +65,6 @@ const {
   videoUrlOf,
   onVideoError,
   onThumbError,
-  mainFrameBlob,
   canvasThumbCache,
 } = preview;
 const mainVideoRef = actions.mainVideoRef;
@@ -143,14 +142,6 @@ const mainVideoRef = actions.mainVideoRef;
       <!-- 主预览 / 失败信息 -->
       <div class="preview-area">
         <div class="main-video-wrap">
-          <!-- 大视频预览首帧遮罩：canvas 抽帧结果叠在 video 上方，避免 loadeddata 黑屏 -->
-          <img
-            v-if="mainFrameBlob && !isPlaying"
-            :src="mainFrameBlob"
-            class="main-frame-img"
-            draggable="false"
-            @click="togglePlay"
-          />
           <video
             v-if="selected.workFile && videoUrlOf(selected)"
             ref="mainVideoRef"

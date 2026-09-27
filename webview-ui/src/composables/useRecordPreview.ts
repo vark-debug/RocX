@@ -20,8 +20,7 @@ export function useRecordPreview(
   const canvasThumbPending = ref<Set<string>>(new Set());
   const canvasThumbFailed = ref<Set<string>>(new Set());
 
-  const mainFrameBlob = ref<string | null>(null);
-  let mainFrameSeq = 0;
+  // 大预览首帧遮罩已删除（大预览只保留 <video preload=metadata>）
 
   // ---------- canvas 抽帧 ----------
   async function extractFirstFrame(
@@ -261,36 +260,6 @@ export function useRecordPreview(
         await getCanvasThumbUrl(r);
       } catch (_) {}
     }
-    await generateMainFrame();
-  }
-
-  async function generateMainFrame() {
-    const all = records();
-    const selId = selectedIdRef();
-    const rec = all.find((r) => r.id === selId) || null;
-    if (!rec || !rec.workFile) {
-      mainFrameBlob.value = null;
-      return;
-    }
-    if (rec.status !== "generated" && rec.status !== "imported") {
-      mainFrameBlob.value = null;
-      return;
-    }
-    const mySeq = ++mainFrameSeq;
-    try {
-      let vUrl = videoUrlOf(rec);
-      if (!vUrl) vUrl = await resolveUrl(rec);
-      if (mySeq !== mainFrameSeq) return;
-      if (!vUrl) {
-        mainFrameBlob.value = null;
-        return;
-      }
-      const blobUrl = await extractFirstFrame(rec.id, vUrl);
-      if (mySeq !== mainFrameSeq) return;
-      mainFrameBlob.value = blobUrl;
-    } catch (_) {
-      if (mySeq === mainFrameSeq) mainFrameBlob.value = null;
-    }
   }
 
   async function onVideoError(rec: GenerationRecord) {
@@ -346,10 +315,6 @@ export function useRecordPreview(
     if (rec) loadVideoUrl(rec);
   });
 
-  watch(selectedIdRef, () => {
-    mainFrameBlob.value = null;
-  });
-
   onMounted(() => {
     records().forEach((r) => {
       loadThumbUrl(r);
@@ -374,7 +339,6 @@ export function useRecordPreview(
     fileUrlFailedIds,
     canvasThumbPending,
     canvasThumbFailed,
-    mainFrameBlob,
     // 同步工具
     videoUrlOf,
     thumbUrlOf,
@@ -385,6 +349,5 @@ export function useRecordPreview(
     loadVideoUrl,
     loadThumbUrl,
     triggerCanvasThumbs,
-    generateMainFrame,
   };
 }
