@@ -5,6 +5,7 @@ import * as premiereproApi from "./premierepro";
 import { uxp } from "../globals";
 import { notify, getProjectInfo } from "./premierepro";
 import { storage } from "../core/storage";
+import { webhookCore } from "../core/webhook";
 import { projectCore } from "../core/project";
 import { recordsCore } from "../core/records";
 import { filesCore, detectFileKind, WORK_DIR_NAME } from "../core/files";
@@ -14,6 +15,7 @@ import { timelineCore } from "../core/timeline";
 import { framesCore } from "../core/frames";
 import { captureVideoCore } from "../core/captureVideo";
 import { getColorScheme, getUXPInfo, openURL } from "./uxp";
+import type { GenerationRecord, ReportPurpose } from "@shared/messages";
 
 const hostName =
   uxp?.host?.name.toLowerCase().replace(/\s/g, "") || ("" as string);
@@ -314,6 +316,24 @@ export const api = {
   async setApiKey(key: string) {
     return await storage.setApiKey(key);
   },
+
+  // 飞书多维表格联动
+  async getFeishuConfig() {
+    return await storage.getFeishuConfig();
+  },
+  async setFeishuConfig(cfg: {
+    webhookUrl: string;
+    token: string;
+    editorName: string;
+  }) {
+    return await storage.setFeishuConfig(cfg);
+  },
+  async reportGenerated(record: GenerationRecord, purpose?: ReportPurpose) {
+    return await webhookCore.reportGenerated(record, purpose);
+  },
+  async testFeishuReport() {
+    return await webhookCore.testReport();
+  }, 
 
   async toLocalFileUrl(localPath: string) {
     return filesCore.toLocalFileUrl(localPath);

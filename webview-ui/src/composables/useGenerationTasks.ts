@@ -15,11 +15,13 @@ import { bridge } from "../services/bridge";
 import { MiniMaxAPI, MiniMaxError } from "../services/MiniMax";
 import { usePolling } from "./usePolling";
 import {
+  REPORT_PURPOSE,
   type GenerationRecord,
   type MiniMaxModel,
   type MiniMaxRatio,
   type MiniMaxResolution,
   type ReferenceItem,
+  type ReportPurpose,
 } from "@shared/messages";
 import type { VideoGenCapability, ModelDescriptor } from "../providers/core/types";
 
@@ -63,6 +65,24 @@ export function useGenerationTasks(opts: {
       };
     }
     return { message: String(e?.message || e) };
+  }
+
+  // ---------- 飞书多维表格上报 ----------
+  /**
+   * 把已生成记录推送到飞书多维表格。
+   * 全程不阻塞：桥调用 / 限流重试都在后台完成，失败仅 toast 提示。
+   * purpose 缺省时由 UXP 端按记录推断（升级任务带 upgradedFromResolution）。
+   */
+  function reportToFeishu(rec: GenerationRecord, purpose?: ReportPurpose) {
+    bridge
+      .reportGenerated(rec, purpose)
+      .then((r) => {
+        // skipped = 未配置 webhook 地址，属于正常情况，静默
+        if (!r.ok && !r.skipped) opts.showToast(`飞书上报失败: ${r.error}`);
+      })
+      .catch((e: any) => {
+        opts.showToast(`飞书上报失败（桥调用异常）: ${e?.message || e}`);
+      });
   }
 
   // ---------- 轮询 ----------
@@ -124,6 +144,8 @@ export function useGenerationTasks(opts: {
                 workFile: dl.localPath,
                 usage: resp.usage,
               };
+              // 上报飞书多维表格：fire-and-forget，不阻塞后续轮询恢复
+              reportToFeishu(opts.records.value[cur]);
             } else {
               opts.records.value[cur] = {
                 ...opts.records.value[cur],
@@ -549,6 +571,12 @@ export function useGenerationTasks(opts: {
             return;
           }
           if (resp.status === "succeeded") {
+            // 优化任务同样消耗额度，无论是否取到 content.prompt 都要上报。
+            // 占位记录已被移除，这里带上 usage 供 UXP 端按 token 计费。
+            reportToFeishu(
+              { ...optimizeRec, usage: resp.usage },
+              REPORT_PURPOSE.PROMPT_OPT,
+            );
             const optimized = resp.content?.prompt;
             if (optimized) {
               opts.prompt.value = optimized;
