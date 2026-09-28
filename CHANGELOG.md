@@ -1,5 +1,38 @@
 # RocX Changelog
 
+## v0.3.0 (2026-09-28)
+
+首个**团队功能**版本。生成成功后自动把"谁在什么工程、用什么素材、生成了哪条视频、花了多少估价"上报到飞书多维表格，让团队可以在表格里做统计、结算与按工程追溯。
+
+### 新增
+
+- **飞书多维表格联动**（设置面板新增 Webhook 地址 / Token / 剪辑师三项）
+  - 在记录首次变为 `generated` 的瞬间 fire-and-forget 上报，失败仅 toast 提示，不影响生成结果
+  - 上报字段：`recordId` / `estimateCost` / `editorName` / `projectName` / `purpose`
+  - 上报请求从 UXP 端发出，token 留在 secureStorage，不跨桥暴露给 webview
+- **多用途分类（`purpose` 字段）**：`视频生成` / `分辨率升级` / `提示词优化`，可在飞书侧按列做透视与汇总
+- **估价三档**（统一保留三位小数）
+  - 视频生成：`(参考视频时长 + 输出视频时长) × 档位单价`（2K=0.8 / 768P=0.5 / 480P=0.33 元/秒）
+  - 分辨率升级：`(参考视频时长 + 输出视频时长) × 0.3`
+  - 提示词优化：`prompt_tokens × 5.80 + completion_tokens × 23.00` 元 / 百万 tokens
+- **飞书限流自动重试**：命中错误码 `800005652` 或 HTTP 429 时按 400 / 800 / 1600ms 指数退避重试，最多 3 次，每次带 ±50% 抖动。鉴权、参数、网络异常不重试
+- **设置页「测试上报」按钮**：用固定样例发一次 webhook，验证地址 / 令牌 / 表格字段映射；复用同一重试逻辑，避免测试路径与生产路径行为不一致
+- **`uxp.config.ts` 网络白名单**：`https://*.feishu.cn`（租户级子域名，必须通配）+ `https://connector.dingtalk.com`（测试用）
+
+### 修复
+
+- `storage.readSettings()` 此前在 `secureStorage` 命中时直接 `return { apiKey }`，会把兜底文件里的非密钥字段（`dryRun` 及本次新增的飞书三项）全部丢弃。改为"兜底文件为底 + secureStorage 覆盖密钥"，且保留旧明文 apiKey 自动迁移
+
+### 兼容性
+
+- 仍向下兼容 Premiere Pro 25.6.4（UXP 8.1），25.6 / 26.x 全系可运行
+- 新增 manifest 网络白名单项**必须重新加载插件**才生效（manifest 改动不热更新）
+
+### 安装与验证
+
+- 飞书自动化 webhook 强烈建议开启凭证校验，否则单流程频率上限仅 1 次/秒（开启后 5 次/秒）
+- 单 URL 方案可支撑约 100~200 人团队稳态运行，详见 `.trae/specs/add-feishu-bitable-webhook/spec.md` 的容量评估
+
 ## v0.2.0 (2026-09-27)
 
 首个 **Windows + macOS 双平台全量验证**版本。向下兼容到 **Premiere Pro 25.6.4**，已在 Win / Mac 双平台完成全流程验证。
