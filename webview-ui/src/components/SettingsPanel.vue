@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted } from "vue";
 import { bridge } from "../services/bridge";
 
 declare const __ROCX_DEV__: boolean;
@@ -14,6 +14,53 @@ const emit = defineEmits<{
 const apiKey = ref(props.initialKey);
 const saving = ref(false);
 const message = ref("");
+
+// ---------- 飞书多维表格联动 ----------
+const feishuUrl = ref("");
+const feishuToken = ref("");
+const editorName = ref("");
+const feishuSaving = ref(false);
+const feishuMessage = ref("");
+const feishuTesting = ref(false);
+
+/** 用固定样例打一次 webhook，验证地址 / 令牌 / 表格字段映射 */
+async function testFeishu() {
+  feishuTesting.value = true;
+  feishuMessage.value = "";
+  try {
+    const r = await bridge.testFeishuReport();
+    feishuMessage.value = r.ok
+      ? "✓ 测试上报成功，请去飞书表格查看新增行"
+      : `测试失败: ${r.error}`;
+  } catch (e: any) {
+    feishuMessage.value = `测试失败（桥调用异常）: ${e?.message || e}`;
+  } finally {
+    feishuTesting.value = false;
+  }
+}
+
+onMounted(async () => {
+  try {
+    const cfg = await bridge.getFeishuConfig();
+    feishuUrl.value = cfg.webhookUrl;
+    feishuToken.value = cfg.token;
+    editorName.value = cfg.editorName;
+  } catch (e: any) {
+    feishuMessage.value = `读取失败: ${e?.message || e}`;
+  }
+});
+
+async function saveFeishu() {
+  feishuSaving.value = true;
+  feishuMessage.value = "";
+  const r = await bridge.setFeishuConfig({
+    webhookUrl: feishuUrl.value,
+    token: feishuToken.value,
+    editorName: editorName.value,
+  });
+  feishuSaving.value = false;
+  feishuMessage.value = r.ok ? "✓ 已保存" : `保存失败: ${r.error}`;
+}
 
 async function save() {
   saving.value = true;
@@ -74,6 +121,51 @@ function attachDebugHandlers(MiniMaxAPI: any) {
       </button>
     </div>
     <div v-if="message" class="message">{{ message }}</div>
+
+    <!-- 飞书多维表格联动：生成成功后自动上报 -->
+    <div class="feishu-block">
+      <div class="feishu-title">飞书多维表格联动</div>
+      <div class="settings-row">
+        <label class="label">Webhook 地址</label>
+        <input
+          v-model="feishuUrl"
+          type="text"
+          placeholder="https://xxx.feishu.cn/base/workflow/webhook/event/..."
+          class="input"
+        />
+      </div>
+      <div class="settings-row">
+        <label class="label">Bearer Token</label>
+        <input
+          v-model="feishuToken"
+          type="password"
+          placeholder="开启凭证校验后填写（强烈建议开启）"
+          class="input"
+        />
+      </div>
+      <div class="settings-row">
+        <label class="label">剪辑师</label>
+        <input
+          v-model="editorName"
+          type="text"
+          placeholder="你的名字"
+          class="input"
+        />
+        <button @click="saveFeishu" :disabled="feishuSaving" class="save-btn">
+          {{ feishuSaving ? '保存中...' : '保存' }}
+        </button>
+      </div>
+      <div class="settings-row">
+        <button
+          @click="testFeishu"
+          :disabled="feishuTesting"
+          class="test-btn"
+        >
+          {{ feishuTesting ? '上报中...' : '测试上报' }}
+        </button>
+      </div>
+      <div v-if="feishuMessage" class="message">{{ feishuMessage }}</div>
+    </div>
 
     <!-- DEV：生成工作目录与调试工具仅 dev 模式可见 -->
     <template v-if="__ROCX_DEV__">
@@ -137,10 +229,39 @@ function attachDebugHandlers(MiniMaxAPI: any) {
   }
 }
 
+// 区分主操作：测试上报用描边按钮，避免与「保存」抢视觉焦点
+.test-btn {
+  padding: 3px 8px;
+  font-size: 11px;
+  background: transparent;
+  color: var(--uxp-host-link-text-color, #4b9cf5);
+  border: 1px solid var(--uxp-host-border-color, #454545);
+  border-radius: 3px;
+  cursor: pointer;
+  &:disabled {
+    opacity: 0.5;
+  }
+}
+
 .message {
   font-size: 10px;
   margin-top: 2px;
   color: var(--uxp-host-link-text-color, #4b9cf5);
+}
+
+.feishu-block {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--uxp-host-border-color, #454545);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  .feishu-title {
+    font-size: 11px;
+    font-weight: 500;
+    opacity: 0.85;
+  }
 }
 
 .workdir-row {

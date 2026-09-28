@@ -76,6 +76,10 @@ const manifest: UXP_Manifest = {
         "https://cdn.hailuoai.com",
         // MiniMax 生成结果 CDN（用户报告实际响应域名）
         "https://algeng-video-infer.oss-cn-shanghai.aliyuncs.com",
+        // 飞书多维表格自动化 webhook（租户级子域名，如 xxx.feishu.cn，必须通配）
+        "https://*.feishu.cn",
+        // 钉钉连接器 webhook（测试用）
+        "https://connector.dingtalk.com",
         // 扩展 provider 时在此追加，例如：
         // Kling: "https://api.klingai.com", "https://cdn.klingai.com"
         // Runway: "https://api.runwayml.com", "https://cdn.runwayml.com"
@@ -85,6 +89,9 @@ const manifest: UXP_Manifest = {
     /**
      * Webview 白名单：需与 network.domains 保持同步；
      * 扩展 provider 时同步在此追加对应域名。
+     *
+     * 注：飞书 / 钉钉 webhook 请求均由 UXP 端 `core/feishu.ts` 发出，webview
+     * 不直接请求这两个域名，故此处不需要对应的白名单条目。
      */
     webview: {
       allow: "yes",

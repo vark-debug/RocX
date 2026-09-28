@@ -31,6 +31,11 @@ export const bridge = {
   importToProject: (args: any) => ensure().importToProject(args),
   getApiKey: () => ensure().getApiKey(),
   setApiKey: (k: string) => ensure().setApiKey(k),
+  getFeishuConfig: () => ensure().getFeishuConfig(),
+  setFeishuConfig: (cfg: any) => ensure().setFeishuConfig(cfg),
+  reportGenerated: (record: any, purpose?: any) =>
+    ensure().reportGenerated(record, purpose),
+  testFeishuReport: () => ensure().testFeishuReport(),
   toLocalFileUrl: (p: string) => ensure().toLocalFileUrl(p),
   readAsDataUrl: (fileOrPath: any) => ensure().readAsDataUrl(fileOrPath),
   ensureWorkDir: () => ensure().ensureWorkDir(),

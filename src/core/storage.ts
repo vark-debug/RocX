@@ -13,9 +13,23 @@ const SETTINGS_FALLBACK_FILENAME = "app-settings.sec.json";
 interface PersistedSettings {
   apiKey?: string;
   dryRun?: boolean;
+  /** 飞书多维表格自动化 webhook 地址 */
+  feishuWebhookUrl?: string;
+  /** 飞书 webhook 凭证校验（Authorization: Bearer <token>） */
+  feishuToken?: string;
+  /** 剪辑师（自定义字段，全局生效） */
+  editorName?: string;
 }
 
 const SECURE_KEY = "rocx.apiKey";
+const SECURE_FEISHU_TOKEN_KEY = "rocx.feishu.token";
+
+/** 飞书团队设置（对外读写结构） */
+export interface FeishuConfig {
+  webhookUrl: string;
+  token: string;
+  editorName: string;
+}
 
 // 简单混淆（不是真加密；只防 grep / 误打开看）
 function obfuscate(s: string): string {
@@ -151,47 +165,46 @@ async function writeFallbackFile(settings: PersistedSettings): Promise<void> {
 }
 
 async function readSettings(): Promise<PersistedSettings> {
-  // 1) secureStorage
-  if (hasSecureStorage()) {
-    try {
-      const apiKey = await secureGet(SECURE_KEY);
-      if (apiKey) return { apiKey };
-    } catch (e) {
-      console.warn("[storage] secureStorage read failed, fallback:", e);
-    }
-  }
-  // 2) 兜底文件 + 旧明文迁移
+  // 兜底文件是非密钥字段（dryRun / 飞书设置）的唯一来源，必须先读
   const fb = await readFallbackFile();
-  if (fb.apiKey) {
-    // 自动迁移到 secureStorage（如果可用）
-    if (hasSecureStorage()) {
-      try {
-        const ok = await secureSet(SECURE_KEY, fb.apiKey);
-        if (ok)
-          console.warn(
-            "[storage] 已从 app-settings.json 迁移到 secureStorage",
-          );
-      } catch (e) {
-        console.warn("[storage] 迁移到 secureStorage 失败:", e);
-      }
+  if (!hasSecureStorage()) return fb;
+
+  // 密钥类字段以 secureStorage 为准
+  const merged: PersistedSettings = { ...fb };
+  try {
+    const apiKey = await secureGet(SECURE_KEY);
+    if (apiKey) {
+      merged.apiKey = apiKey;
+    } else if (fb.apiKey) {
+      // 自动迁移旧明文 apiKey 到 secureStorage（如果可用）
+      const ok = await secureSet(SECURE_KEY, fb.apiKey);
+      if (ok)
+        console.warn("[storage] 已从 app-settings.json 迁移到 secureStorage");
     }
+    const feishuToken = await secureGet(SECURE_FEISHU_TOKEN_KEY);
+    if (feishuToken) merged.feishuToken = feishuToken;
+  } catch (e) {
+    console.warn("[storage] secureStorage read failed, fallback:", e);
   }
-  return fb;
+  return merged;
 }
 
 async function writeSettings(settings: PersistedSettings): Promise<void> {
   // 写入兜底文件（明文）；plugin-data 是插件私有目录
   await writeFallbackFile(settings);
 
-  // 同步写入 secureStorage（如可用），作为冗余备份
+  if (!hasSecureStorage()) return;
+  // 密钥类字段同步写入 secureStorage（如可用），作为冗余备份
   if (settings.apiKey) {
-    if (hasSecureStorage()) {
-      const ok = await secureSet(SECURE_KEY, settings.apiKey);
-      if (!ok)
-        console.warn("[storage] secureStorage 写入失败，仅落兜底文件");
-    }
+    const ok = await secureSet(SECURE_KEY, settings.apiKey);
+    if (!ok) console.warn("[storage] secureStorage 写入失败，仅落兜底文件");
   } else {
     await secureDelete(SECURE_KEY);
+  }
+  if (settings.feishuToken) {
+    await secureSet(SECURE_FEISHU_TOKEN_KEY, settings.feishuToken);
+  } else {
+    await secureDelete(SECURE_FEISHU_TOKEN_KEY);
   }
 }
 
@@ -226,6 +239,36 @@ export const storage = {
     try {
       const s = await readSettings();
       s.dryRun = v;
+      await writeSettings(s);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  },
+
+  async getFeishuConfig(): Promise<FeishuConfig> {
+    const s = await readSettings();
+    return {
+      webhookUrl: s.feishuWebhookUrl || "",
+      token: s.feishuToken || "",
+      editorName: s.editorName || "",
+    };
+  },
+
+  async setFeishuConfig(
+    cfg: FeishuConfig,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const webhookUrl = (cfg?.webhookUrl || "").trim();
+      const token = (cfg?.token || "").trim();
+      const editorName = (cfg?.editorName || "").trim();
+      const s = await readSettings();
+      if (webhookUrl) s.feishuWebhookUrl = webhookUrl;
+      else delete s.feishuWebhookUrl;
+      if (token) s.feishuToken = token;
+      else delete s.feishuToken;
+      if (editorName) s.editorName = editorName;
+      else delete s.editorName;
       await writeSettings(s);
       return { ok: true };
     } catch (e: any) {

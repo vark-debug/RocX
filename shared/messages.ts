@@ -21,6 +21,16 @@ export type VideoGenCapability =
   | "videoReference"
   | "audioReference";
 
+/** 上报用途（写入多维表格的 purpose 列） */
+export const REPORT_PURPOSE = {
+  VIDEO_GEN: "视频生成",
+  UPSCALE: "分辨率升级",
+  PROMPT_OPT: "提示词优化",
+} as const;
+
+export type ReportPurpose =
+  (typeof REPORT_PURPOSE)[keyof typeof REPORT_PURPOSE];
+
 /** 通用模型描述符（具体 provider 实现用） */
 export interface ModelDescriptor {
   providerId: string;
@@ -76,6 +86,10 @@ export interface GenerationRecord {
   };
   usage?: {
     total_seconds?: number;
+    /** LLM 类任务（如提示词优化）的 token 用量，用于按 token 计费 */
+    total_tokens?: number;
+    prompt_tokens?: number;
+    completion_tokens?: number;
   };
   /** 任务首次提交时刻（用于计费恢复的连续轮询） */
   submittedAt?: string;
@@ -298,6 +312,42 @@ export interface UxptoWebviewAPI {
   /** 获取 / 设置 API Key（uxp.storage） */
   getApiKey(): Promise<string | null>;
   setApiKey(key: string): Promise<{ ok: boolean; error?: string }>;
+
+  /** 飞书多维表格联动设置（与 API Key 同位置持久化） */
+  getFeishuConfig(): Promise<{
+    webhookUrl: string;
+    token: string;
+    editorName: string;
+  }>;
+  setFeishuConfig(cfg: {
+    webhookUrl: string;
+    token: string;
+    editorName: string;
+  }): Promise<{ ok: boolean; error?: string }>;
+
+  /**
+   * 生成成功后上报到飞书多维表格 webhook（内部含限流退避重试）
+   * purpose 缺省时按记录推断（存在 upgradedFromResolution 即为分辨率升级）
+   * skipped=true 表示未配置 webhook 地址（未发请求）
+   */
+  reportGenerated(
+    record: GenerationRecord,
+    purpose?: ReportPurpose,
+  ): Promise<{
+    ok: boolean;
+    skipped?: boolean;
+    error?: string;
+  }>;
+
+  /**
+   * 设置页「测试上报」：发送固定样例到 webhook，验证地址 / 令牌 / 字段映射
+   * skipped=true 表示未配置 webhook 地址（未发请求）
+   */
+  testFeishuReport(): Promise<{
+    ok: boolean;
+    skipped?: boolean;
+    error?: string;
+  }>;
 
   /** 把已生成的视频（本地路径）作为参考：返回 ReferenceItem（会走上传） */
   uploadExistingFileAsReference(args: {
