@@ -56,6 +56,13 @@ export interface ReferenceItem {
   uploading?: boolean;
   /** webview 端标记：是否已被某次生成提交消费；用于清空状态列显示（UI 用，不持久化到磁盘） */
   consumed?: boolean;
+  /**
+   * webview 端标记：抓帧→PS 路径下的「等待用户点修改完成」状态（UI 用，不持久化到磁盘）。
+   * 抓帧后立刻写入，调用方调 bridge.openInPhotoshop 启动 PS；用户在面板上点确认按钮后才
+   * 走 uploadReferenceFile，成功后清掉。references 数组本身不持久化，session 断电即丢，
+   * 避免刷新/重载场景下静默上传历史 jpg。
+   */
+  pendingUpload?: boolean;
 }
 
 export interface GenerationRecord {
@@ -442,6 +449,16 @@ export interface UxptoWebviewAPI {
     ok: boolean;
     fileId?: string;
     uploadedAt?: string;
+    error?: string;
+  }>;
+
+  /**
+   * 用系统关联启动 Photoshop 打开指定本地文件（抓帧→PS 路径）。
+   * 优先 shell.openExternal("file://" + encodeURI(localPath))；失败退到 shell.openPath。
+   * 异常一律吞掉转成 {ok:false}，webview 端不据此报错，只 console.warn。
+   */
+  openInPhotoshop(localPath: string): Promise<{
+    ok: boolean;
     error?: string;
   }>;
 

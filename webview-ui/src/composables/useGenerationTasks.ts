@@ -215,6 +215,15 @@ export function useGenerationTasks(opts: {
 
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    // 抓帧→PS 路径下，pendingUpload=true 的 ref 还差 fileId（用户没点修改完成），
+    // 不能直接进 MiniMax createVideo（wireFormat 会 throw）。提交前先过滤并 toast 提示。
+    const refsForSubmit = opts.references.value.filter((r) => !r.pendingUpload);
+    if (refsForSubmit.length < opts.references.value.length) {
+      const skipped = opts.references.value.length - refsForSubmit.length;
+      opts.showToast(
+        `已跳过 ${skipped} 张「✏ PS 中」的参考素材，请先点「修改完成」再生成`,
+      );
+    }
     const newRec: GenerationRecord = {
       id,
       createdAt: now,
@@ -226,7 +235,7 @@ export function useGenerationTasks(opts: {
         resolution: opts.resolution.value,
         provider: opts.currentProviderId.value,
       },
-      references: [...opts.references.value],
+      references: [...refsForSubmit],
       status: "pending",
       submittedAt: now,
     };

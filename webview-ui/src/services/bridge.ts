@@ -48,6 +48,7 @@ export const bridge = {
   captureFrameOnlyAsReference: (args?: any) =>
     ensure().captureFrameOnlyAsReference(args),
   uploadReferenceFile: (args: any) => ensure().uploadReferenceFile(args),
+  openInPhotoshop: (p: string) => ensure().openInPhotoshop(p),
   captureWorkAreaAndUploadAsReference: (args?: any) =>
     ensure().captureWorkAreaAndUploadAsReference(args),
   captureWorkAreaOnlyAsReference: (args?: any) =>

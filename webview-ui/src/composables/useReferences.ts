@@ -179,6 +179,75 @@ export function useReferences(opts: {
     uploadInBackground();
   }
 
+  // ---------- 抓帧→PS ----------
+  /**
+   * 抓帧 + 用系统关联打开 Photoshop，UI 显示「✏ PS 中 · 修改完成」按钮。
+   * 与 captureFrameAsReference 的关键区别：push 到 references 时打 pendingUpload=true，
+   * **不**调 uploadInBackground；只有用户在面板点「修改完成」后才上传到 MiniMax。
+   * references 数组本身不持久化，刷新/重载/webview reload 会自动丢 pendingUpload 状态，
+   * 杜绝「刷新错传之前缓存的图片」。
+   */
+  async function captureFrameAndOpenInPs() {
+    // 校验图片数量上限
+    const i = opts.references.value.filter((x) => x.type === "reference_image").length;
+    if (i >= 9) {
+      opts.showToast("图片参考最多 9 个");
+      return;
+    }
+    // 阶段 1：UXP 端只导出（不等上传），立即拿到本地 reference，UI 立即显示
+    const r = await bridge.captureFrameOnlyAsReference();
+    if (!r.ok || !r.reference) {
+      opts.showToast(`抓帧失败: ${r.error}`);
+      return;
+    }
+    // 关键：标记 pendingUpload=**true**、不调 uploadInBackground
+    r.reference.pendingUpload = true;
+    opts.references.value.push(r.reference);
+    // 阶段 3：调系统关联启动 PS（fire-and-forget；失败仅 console.warn，不污染 toast）
+    bridge.openInPhotoshop(r.reference.localPath).then((rs) => {
+      if (!rs.ok) {
+        console.warn(
+          "[webview] openInPhotoshop failed (PS 未启动 / launchProcess 未授权)：",
+          rs.error,
+        );
+      }
+    });
+  }
+
+  // ---------- 用户在面板点「修改完成」：上传 pendingUpload ref ----------
+  /**
+   * 把 pendingUpload=true 的 ref 推到上传流程；与 uploadInBackground 区别在于：
+   * - 拿 ref 用绝对下标 idx（不是「最新 push 的那一条」），因为 ref 可能不在数组末尾
+   * - 成功后清掉 pendingUpload（uploading 由自身流程管）
+   * - 失败时保留 pendingUpload=true 让用户重试
+   */
+  async function confirmPendingUpload(idx: number) {
+    const ref = opts.references.value[idx];
+    if (!ref || !ref.pendingUpload) return;
+    if (ref.uploading) return; // 防重复点
+    ref.uploading = true;
+    try {
+      const up = await bridge.uploadReferenceFile({
+        filePath: ref.localPath,
+        fileName: ref.fileName,
+      });
+      if (up.ok && up.fileId) {
+        ref.fileId = up.fileId;
+        ref.uploadedAt = up.uploadedAt;
+        ref.uploading = false;
+        ref.pendingUpload = false;
+      } else {
+        ref.uploading = false;
+        // pendingUpload 保持 true，让用户可以再点「修改完成」重试
+        opts.showToast(`参考素材上传失败: ${up.error || "未知错误"}`);
+      }
+    } catch (e: any) {
+      ref.uploading = false;
+      console.error("[webview] confirmPendingUpload threw:", e);
+      opts.showToast(`参考素材上传异常: ${String(e?.message || e)}`);
+    }
+  }
+
   // ---------- 抓视频 ----------
   async function captureVideoAsReference() {
     // 校验视频数量上限
@@ -267,6 +336,8 @@ export function useReferences(opts: {
     removeReference,
     useAsReference,
     captureFrameAsReference,
+    captureFrameAndOpenInPs,
     captureVideoAsReference,
+    confirmPendingUpload,
   };
 }

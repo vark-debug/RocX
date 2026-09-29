@@ -9,8 +9,10 @@ const emit = defineEmits<{
   "update:references": [ReferenceItem[]];
   add: [FileKind];
   captureFrame: [];
+  captureFrameAndOpenPs: [];
   captureVideo: [];
   remove: [number];
+  confirmPending: [number];
 }>();
 
 function kindOf(ref: ReferenceItem): FileKind {
@@ -25,6 +27,8 @@ function iconOf(ref: ReferenceItem): string {
 function statusOf(ref: ReferenceItem): string {
   // 阶段 2：webview 标记的上传中（明确不会持久化到磁盘）
   if (ref.uploading) return "上传中…";
+  // 抓帧→PS 路径：等待用户点「修改完成」
+  if (ref.pendingUpload) return "✏ PS 中";
   // 阶段 3：上传完成（fileId 已设置）
   if (ref.fileId && ref.uploadedAt) {
     const age = Date.now() - new Date(ref.uploadedAt).getTime();
@@ -33,6 +37,11 @@ function statusOf(ref: ReferenceItem): string {
   }
   // 阶段 1：导出完成（本地文件已生成，fileId 还没回填）
   return "已就绪";
+}
+
+/** 是否在 ref-item 行内显示「修改完成」按钮（pendingUpload 且不在上传中） */
+function showConfirmPending(ref: ReferenceItem): boolean {
+  return !!ref.pendingUpload && !ref.uploading;
 }
 </script>
 
@@ -43,6 +52,7 @@ function statusOf(ref: ReferenceItem): string {
       <div class="add-buttons">
         <button @click="emit('captureVideo')" type="button" class="add-btn">🎬 抓视频</button>
         <button @click="emit('captureFrame')" type="button" class="add-btn">🖼 抓帧</button>
+        <button @click="emit('captureFrameAndOpenPs')" type="button" class="add-btn">🎨 抓帧→PS</button>
       </div>
     </div>
     <div v-if="references.length > 0" class="ref-list">
@@ -62,6 +72,13 @@ function statusOf(ref: ReferenceItem): string {
         </div>
         <span class="ref-name" :title="ref.localPath">{{ ref.fileName }}</span>
         <span class="ref-status">{{ statusOf(ref) }}</span>
+        <button
+          v-if="showConfirmPending(ref)"
+          class="ref-done-btn"
+          @click="emit('confirmPending', idx)"
+          type="button"
+          title="在 PS 中修改完成后点这里，确认上传到 MiniMax"
+        >修改完成</button>
         <button class="remove-btn" @click="emit('remove', idx)" type="button">×</button>
       </div>
       <div class="ref-tips">视频≤3 总时长≤15s · 图片≤9</div>
@@ -152,6 +169,20 @@ function statusOf(ref: ReferenceItem): string {
 .ref-status {
   font-size: 10px;
   opacity: 0.7;
+}
+
+.ref-done-btn {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  background: #2e7d32;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover {
+    background: #1b5e20;
+  }
 }
 
 .remove-btn {

@@ -378,6 +378,12 @@ export const api = {
     return await framesCore.uploadReferenceFile(args);
   },
 
+  // 抓帧→PS：用 C++ Hybrid Plugin 强制命中 PS，失败 fallback 到系统关联
+  // 详见 capture-frame-and-open-ps spec + cpp-hybrid-plugin-ps-launch spec
+  async openInPhotoshop(localPath: string) {
+    return await filesCore.openWithPhotoshopNative(localPath);
+  },
+
   // 抓取当前序列工作区（in/out）→ 导出视频 → 上传 MiniMax → 返回 ReferenceItem
   async captureWorkAreaAndUploadAsReference(args?: { exportFull?: boolean }) {
     return await captureVideoCore.captureWorkAreaAndUploadAsReference(args);

@@ -81,6 +81,12 @@ export function useGenerationState(opts: {
           ...rec.params,
           provider: rec.params.provider || DEFAULT_PROVIDER_ID,
         },
+        // pendingUpload 是 webview session-only 标记，不应进入持久化层；
+        // 这里显式清掉，避免历史 record 里残留误判（实际根本不会写盘，仅作防御）。
+        references: rec.references.map((ref) => {
+          const { pendingUpload: _ignored, ...rest } = ref as any;
+          return rest;
+        }),
       }));
       opts.storageMode.value = r.data.storageMode;
       // 故障恢复：扫描 generating 状态的记录

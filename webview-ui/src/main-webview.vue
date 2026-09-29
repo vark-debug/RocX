@@ -236,8 +236,10 @@ async function refreshProject() {
         v-model:references="references"
         @add="refsApi.addReference"
         @captureFrame="refsApi.captureFrameAsReference"
+        @captureFrameAndOpenPs="refsApi.captureFrameAndOpenInPs"
         @captureVideo="refsApi.captureVideoAsReference"
         @remove="refsApi.removeReference"
+        @confirmPending="refsApi.confirmPendingUpload"
       />
       <div class="prompt-divider"></div>
       <PromptInput

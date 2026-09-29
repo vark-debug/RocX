@@ -217,6 +217,78 @@ export const filesCore = {
     }
   },
 
+  /**
+   * 用系统关联启动 Photoshop 打开指定本地文件（抓帧→PS 路径）。
+   *
+   * UXP 实际可用姿势：
+   *   - `shell.openExternal(scheme://...)` 仅支持 manifest `launchProcess.schemes`
+   *     白名单里的 scheme（https/slack/ws 等）；`file://` 不被接受（即使在 schemes 里）
+   *   - `shell.openPath(localPath)` 按系统文件关联启动应用，依赖
+   *     `launchProcess.extensions` 白名单里的扩展名（jpg/jpeg/png/webp 已在白名单）
+   *
+   * 因此正确路径：直接调 `shell.openPath(localPath)`，macOS 上由 LaunchServices 按 jpg
+   * 关联启动 PS；Windows 上由 ShellExecute 启动。两条路径都被 manifest 允许。
+   * 失败原因一般是系统未把 jpg 关联到 PS（罕见），webview 端仅 console.warn，不污染 UI。
+   */
+  async openWithPhotoshop(localPath: string): Promise<{ ok: boolean; error?: string }> {
+    if (!localPath) return { ok: false, error: "路径为空" };
+    const uxpAny: any = require("uxp");
+    if (!uxpAny?.shell?.openPath) return { ok: false, error: "uxp.shell.openPath 不可用" };
+    try {
+      await uxpAny.shell.openPath(localPath);
+      return { ok: true };
+    } catch (e: any) {
+      console.warn("[files] openWithPhotoshop openPath failed:", e?.message || e);
+      return { ok: false, error: String(e?.message || e) };
+    }
+  },
+
+  /**
+   * 走 C++ Hybrid Plugin 路径打开 Photoshop（cpp-hybrid-plugin-ps-launch spec）。
+   *
+   * 行为：
+   *   - 优先调 C++ addon `RocXBridge.openFileInPhotoshop(path)`，由 native 端用
+   *     macOS `NSWorkspace.openURLs:withApplicationBundleIdentifier:` +
+   *     bundle id "com.adobe.Photoshop" 强制命中 PS，不依赖系统 jpg 默认关联；
+   *     Windows 用注册表扫描 + ShellExecuteExW
+   *   - addon 未加载（manifest 未声明 / uxpaddon 缺失 / PR 版本过低）/ addon
+   *     函数返回 {ok:false} 时静默 fallback 到 `openWithPhotoshop`（纯 UXP shell.openPath）
+   *   - 任何异常吞掉 console.warn，不污染 UI
+   *
+   * 返回值对调用方语义等价：`{ ok }`；source 字段用于诊断日志。
+   */
+  async openWithPhotoshopNative(
+    localPath: string,
+  ): Promise<{ ok: boolean; source: "native" | "fallback"; error?: string }> {
+    if (!localPath) return { ok: false, source: "fallback", error: "路径为空" };
+    // 1) 试 hybrid addon
+    try {
+      // UXP Hybrid Plugin:`require("name.uxpaddon")` 返回 Promise，必须 await
+      // 之后才能拿到 exports 上的 openFileInPhotoshop（见 UXP Hybrid Plugin SDK）。
+      const addon: any = await (require as any)("RocXBridge.uxpaddon");
+      if (addon && typeof addon.openFileInPhotoshop === "function") {
+        const r = await addon.openFileInPhotoshop(localPath);
+        if (r && r.ok) {
+          return { ok: true, source: "native" };
+        }
+        if (r && r.error) {
+          console.warn("[files] hybrid addon returned error, fallback to UXP:", r.error);
+        }
+      } else {
+        console.warn("[files] hybrid addon loaded but openFileInPhotoshop missing");
+      }
+    } catch (e: any) {
+      // MODULE_NOT_FOUND / native bundle 缺失 / API 不匹配
+      console.warn(
+        "[files] hybrid addon unavailable, fallback to UXP shell.openPath:",
+        e?.message || e,
+      );
+    }
+    // 2) fallback 到纯 UXP shell.openPath
+    const f = await this.openWithPhotoshop(localPath);
+    return { ok: f.ok, source: "fallback", error: f.error };
+  },
+
   /** 把 File token 复制到生成工作目录 */
   async saveFileToWorkDir(
     file: any,
