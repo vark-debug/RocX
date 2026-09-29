@@ -5,6 +5,11 @@ const extraPrefs: UXP_Config_Extra = {
   hotReloadPort: 8080,
   webviewUi: true,
   webviewReloadPort: 8082,
+  /**
+   * Adobe UXP Hybrid Plugin 的 .uxpaddon 不走这里：vite-uxp-plugin 内置的
+   * copyHybridBinaries() 会自动把 <root>/public-hybrid/* 拷进 dist/*，
+   * cmake POST_BUILD 已把产物放到 public-hybrid/{mac,win}/<arch>/。
+   */
   copyZipAssets: ["public-zip/*"],
   uniqueIds: true,
   debugger: "udt",
@@ -22,9 +27,17 @@ const manifest: UXP_Manifest = {
   host: [
     {
       app: "premierepro",
-      minVersion: "25.6.0",
+      minVersion: "22.3",
     },
   ],
+  /**
+   * Adobe UXP Hybrid Plugin addon 声明:在插件内嵌 C++ uxpaddon;
+   * 编译产物 RocXBridge.uxpaddon 放在 mac/{arm64,x64}/ 与 win/x64/ 目录,
+   * 由 vite-uxp-plugin 的 copyHybridBinaries 从 public-hybrid/ 拷进 dist/。
+   */
+  addon: {
+    name: "RocXBridge.uxpaddon",
+  },
   entrypoints: [
     {
       type: "panel",
@@ -59,6 +72,10 @@ const manifest: UXP_Manifest = {
   },
   requiredPermissions: {
     /**
+     * Adobe UXP Hybrid Plugin 加载 uxpaddon 必须开启
+     */
+    enableAddon: true,
+    /**
      * 网络白名单：按当前启用的 provider 域名集合维护。
      * 扩展 provider 时（如 kling / runway），需在此追加对应域名，
      * 并同步 `requiredPermissions.webview.domains`。
@@ -66,7 +83,9 @@ const manifest: UXP_Manifest = {
     localFileSystem: "fullAccess",
     launchProcess: {
       schemes: ["https", "slack", "file", "ws"],
-      extensions: [".xd", ".psd", ".bat", ".cmd", ""],
+      // 注意:shell.openPath 按文件扩展名走 LaunchServices(macOS)/ShellExecute(Win),
+      // 必须在白名单里才能被允许执行。抓帧→PS 路径需要 .jpg/.jpeg/.webp/.png。
+      extensions: [".xd", ".psd", ".bat", ".cmd", ".jpg", ".jpeg", ".png", ".webp", ""],
     },
     network: {
       domains: [

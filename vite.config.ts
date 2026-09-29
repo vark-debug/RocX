@@ -28,6 +28,7 @@ export default defineConfig({
     rollupOptions: {
       external: [
         "premierepro", 
+        "RocXBridge.uxpaddon",
         "uxp",
         "fs",
         "os",

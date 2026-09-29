@@ -34,6 +34,13 @@ zip
 
 src/hybrid/win/.vs
 
+# Native C++ Hybrid Plugin (Adobe UXP uxpaddon)
+native/RocXBridge/build/
+# cmake POST_BUILD 产物,由 npm run native:build 重新生成
+public-hybrid/
+# Adobe UXP Hybrid Plugin SDK 头文件已随仓库提供(third_party/uxp-hybrid-sdk/),
+# 无需从 Adobe Developer Console 下载
+
 .env
 scripts/mac-sign.sh
 public/webview-ui/*
