@@ -105,6 +105,20 @@ export const framesCore = {
       const separator = exportFolderPath.includes("\\") ? "\\" : "/";
       const outputPath = exportFolderPath + separator + filename;
 
+      // 先快照目录里已存在的 capture-* 文件名。
+      // exportSequenceFrame 返回 true 只代表导出命令已下发,写盘是异步的;
+      // 若不在此之前快照,第 2 次抓帧时轮询会立刻命中上一次的残留文件,
+      // 导致把旧帧交给 Photoshop。
+      const preExistingNames = new Set<string>();
+      try {
+        const preEntries: any[] = (await exportFolder.getEntries()) || [];
+        for (const e of preEntries) {
+          if (!e.isFolder && /^capture-\d+\./.test(e.name)) preExistingNames.add(e.name);
+        }
+      } catch (e) {
+        console.warn("[frames] pre-export snapshot failed", e);
+      }
+
       // 按 Adobe premiere-api 样本调用 Exporter.exportSequenceFrame
       const Exporter: any = (premierepro as any).Exporter;
       console.log("[frames] calling Exporter.exportSequenceFrame...");
@@ -130,10 +144,9 @@ export const framesCore = {
         };
       }
 
-      // 用 Folder token 列出条目，找到 capture-* 最新的那个
+      // 轮询等待**本次新增**的 capture-* 文件落盘
       // （不依赖 Adobe 25.3 给 .png/.jpg 加后缀的命名 bug）
-      // Windows 上 exportSequenceFrame 返回 true 后文件未必立即可见（写盘延迟），
-      // 短轮询兜底，最多 ~1.5s（macOS 同步写盘，几乎立即命中）
+      // Windows 上写盘有延迟，最多等 ~1.5s；macOS 几乎立即命中
       let actualFile: any = null;
       let actualName: string | null = null;
       const startTs = Date.now();
@@ -141,7 +154,12 @@ export const framesCore = {
         try {
           const entries: any[] = (await exportFolder.getEntries()) || [];
           const captureFiles = entries
-            .filter((e: any) => !e.isFolder && /^capture-\d+\./.test(e.name))
+            .filter(
+              (e: any) =>
+                !e.isFolder &&
+                /^capture-\d+\./.test(e.name) &&
+                !preExistingNames.has(e.name),
+            )
             .sort((a: any, b: any) => {
               const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
               const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
@@ -160,7 +178,7 @@ export const framesCore = {
       if (!actualFile || !actualName) {
         return {
           ok: false,
-          error: `exportSequenceFrame 报成功但目录里没有 capture-* 文件。检查目录: ${exportFolderPath}`,
+          error: `exportSequenceFrame 报成功但 1.5s 内目录里没有新增 capture-* 文件。检查目录: ${exportFolderPath}`,
         };
       }
       const actualPath = `${exportFolderPath}/${actualName}`;
