@@ -116,6 +116,14 @@
 **生成失败提示鉴权/余额错误？**
 检查 API Key 是否有效、账户余额是否充足。
 
+## 致谢
+
+本项目基于 [Bolt UXP](https://github.com/hyperbrew/bolt-uxp) 构建 —— 一个 Vite + TypeScript 驱动的 Adobe UXP 插件脚手架，提供了插件清单生成、Webview UI 热重载、CCX 打包与 C++ Hybrid Plugin 支持。
+
+Bolt UXP 由 [Hyper Brew](https://hyperbrew.co) 以 MIT 协议开源发布，感谢其作者与贡献者。
+
+另：仓库内 `native/RocXBridge/third_party/uxp-hybrid-sdk/` 下的 Adobe UXP Hybrid Plugin SDK 头文件版权归 Adobe 所有，遵循 Adobe 随附的许可协议。
+
 ## License
 
 基于 [MIT](LICENSE) 协议开源。
