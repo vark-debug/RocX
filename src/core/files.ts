@@ -5,6 +5,7 @@
  * 要求 manifest 中 localFileSystem: "fullAccess"
  */
 import { uxp } from "../globals";
+import { getPluginDataFolder } from "./storage";
 import type { FileKind, ReferenceItem } from "@shared/messages";
 
 export const WORK_DIR_NAME = "AI-Generated-Media";
@@ -246,25 +247,27 @@ export const filesCore = {
   /**
    * 走 C++ Hybrid Plugin 路径打开 Photoshop（cpp-hybrid-plugin-ps-launch spec）。
    *
-   * 行为：
-   *   - 优先调 C++ addon `RocXBridge.openFileInPhotoshop(path)`，由 native 端用
-   *     macOS `NSWorkspace.openURLs:withApplicationBundleIdentifier:` +
-   *     bundle id "com.adobe.Photoshop" 强制命中 PS，不依赖系统 jpg 默认关联；
-   *     Windows 用注册表扫描 + ShellExecuteExW
-   *   - addon 未加载（manifest 未声明 / uxpaddon 缺失 / PR 版本过低）/ addon
-   *     函数返回 {ok:false} 时静默 fallback 到 `openWithPhotoshop`（纯 UXP shell.openPath）
-   *   - 任何异常吞掉 console.warn，不污染 UI
+   * 行为（启动顺序：1 C++ → 2 launcher 脚本 → 3 系统兜底）：
+   *   1. 优先调 C++ addon `RocXBridge.openFileInPhotoshop(path)`，由 native 端用
+   *      macOS `NSWorkspace` + bundle id "com.adobe.Photoshop" 强制命中 PS；
+   *      Windows 用注册表扫描 + ShellExecuteExW。addon 未加载 / PR < 26.2
+   *      （Addon is not supported）→ 走第 2 步。
+   *   2. launcher 脚本：把 `{path, ts}` 写到 pluginDataFolder/rocx-launcher-args.json，
+   *      再 `shell.openPath(launcher.ps1 / launcher.command)`，脚本读 JSON 强制命中 PS。
+   *      UXP `shell.openPath` 不支持额外参数，必须走 JSON 中转。
+   *   3. fallback 到纯 UXP `shell.openPath(localPath)`（按系统 jpg 关联启动）。
    *
-   * 返回值对调用方语义等价：`{ ok }`；source 字段用于诊断日志。
+   * 返回值 `{ok, source}`：source ∈ {"native","launcher","fallback"}，供诊断日志。
+   * 任何异常 / 失败均 console.warn，不污染 UI。
    */
   async openWithPhotoshopNative(
     localPath: string,
-  ): Promise<{ ok: boolean; source: "native" | "fallback"; error?: string }> {
+  ): Promise<{ ok: boolean; source: "native" | "launcher" | "fallback"; error?: string }> {
     if (!localPath) return { ok: false, source: "fallback", error: "路径为空" };
-    // 1) 试 hybrid addon
+
+    // 1) C++ Hybrid Plugin
     try {
       // UXP Hybrid Plugin:`require("name.uxpaddon")` 返回 Promise，必须 await
-      // 之后才能拿到 exports 上的 openFileInPhotoshop（见 UXP Hybrid Plugin SDK）。
       const addon: any = await (require as any)("RocXBridge.uxpaddon");
       if (addon && typeof addon.openFileInPhotoshop === "function") {
         const r = await addon.openFileInPhotoshop(localPath);
@@ -272,21 +275,108 @@ export const filesCore = {
           return { ok: true, source: "native" };
         }
         if (r && r.error) {
-          console.warn("[files] hybrid addon returned error, fallback to UXP:", r.error);
+          console.warn("[files] hybrid addon returned error, fallback to launcher:", r.error);
         }
       } else {
         console.warn("[files] hybrid addon loaded but openFileInPhotoshop missing");
       }
     } catch (e: any) {
-      // MODULE_NOT_FOUND / native bundle 缺失 / API 不匹配
+      // MODULE_NOT_FOUND / Addon is not supported / PR 版本过低 / uxpaddon 缺失
       console.warn(
-        "[files] hybrid addon unavailable, fallback to UXP shell.openPath:",
+        "[files] hybrid addon unavailable, fallback to launcher script:",
         e?.message || e,
       );
     }
-    // 2) fallback 到纯 UXP shell.openPath
+
+    // 2) Launcher 脚本
+    const l = await this.openWithPhotoshopLauncher(localPath);
+    if (l.ok) {
+      return { ok: true, source: "launcher" };
+    }
+    if (l.error) {
+      console.warn("[files] launcher script failed, fallback to system:", l.error);
+    }
+
+    // 3) 系统兜底
     const f = await this.openWithPhotoshop(localPath);
     return { ok: f.ok, source: "fallback", error: f.error };
+  },
+
+  /**
+   * 把要打开的图片绝对路径写入 pluginDataFolder/rocx-launcher-args.json，
+   * 然后通过 `shell.openPath` 启动 launcher.ps1 / launcher.command。
+   * UXP `shell.openPath` 不支持参数，所以走 JSON 中转。
+   * Windows 下 manifest 已加 `.ps1` 到 launchProcess.extensions 白名单；
+   * macOS 下加 `.command` / `.sh`。
+   *
+   * launcher 脚本路径：与 manifest.json 同级（即 ccx/dist 根目录下的 launcher.ps1 /
+   * launcher.command，由 public-zip/ 经 vite-uxp-plugin 的 copyZipAssets 拷进来）。
+   */
+  async openWithPhotoshopLauncher(
+    localPath: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const folder = await getPluginDataFolder();
+      if (!folder) return { ok: false, error: "pluginDataFolder 不可用" };
+      const argsJson = JSON.stringify({ path: localPath, ts: Date.now() });
+      const file = await folder.createFile("rocx-launcher-args.json", {
+        overwrite: true,
+      });
+      await file.write(argsJson, { format: uxp.storage.formats.utf8 });
+
+      // 解析 launcher 脚本的 nativePath（与 manifest.json 同级）
+      // Windows 用 .cmd 作为 UXP shell.openPath 入口(.ps1 在某些 UXP 版本会被拒),
+      // .cmd 内部再调 launcher.ps1 做实际工作。
+      const launcherName = process.platform === "win32" ? "launcher.cmd" : "launcher.command";
+      const uxpAny: any = require("uxp");
+      if (!uxpAny?.shell?.openPath) return { ok: false, error: "uxp.shell.openPath 不可用" };
+
+      // 用 UXP 官方 API fs.getPluginFolder() 拿 plugin 内容根目录。
+      // 这是 launcher.cmd / launcher.command / manifest.json 真正所在的位置。
+      // 不能从 pluginDataFolder 的 nativePath 反推,因为 pluginDataFolder 在 PR 上
+      // 是按 app/version 拆目录管理的(<userData>\Adobe\UXP\PluginsStorage\PPRO\<ver>\Developer\<id>\PluginData),
+      // 与 plugin 内容目录完全无关。
+      const uxpFs = getFs();
+      let pluginFolder: any = null;
+      try {
+        if (typeof uxpFs.getPluginFolder === "function") {
+          pluginFolder = await uxpFs.getPluginFolder();
+        }
+      } catch (e) {
+        pluginFolder = null;
+      }
+      if (!pluginFolder) {
+        return {
+          ok: false,
+          error: "fs.getPluginFolder 不可用 (PR < 7.5 或权限不足)",
+        };
+      }
+      let pluginRoot = "";
+      try {
+        pluginRoot = (pluginFolder as any).nativePath || (await uxpFs.getNativePath(pluginFolder));
+      } catch {
+        pluginRoot = "";
+      }
+      if (!pluginRoot) {
+        return { ok: false, error: "无法解析 pluginFolder nativePath" };
+      }
+      const sep = pluginRoot.includes("\\") ? "\\" : "/";
+      const launcherPath = `${pluginRoot.replace(/[\/\\]+$/, "")}${sep}${launcherName}`;
+      // 探测 launcher 是否在 plugin root 内,失败给出清晰错误
+      const probeUrl = `file:///${pluginRoot.replace(/\\/g, "/").replace(/^\//, "")}/${launcherName}`;
+      try {
+        await uxpFs.getEntryWithUrl(probeUrl);
+      } catch {
+        return {
+          ok: false,
+          error: `launcher 脚本不在 plugin root: ${launcherPath}`,
+        };
+      }
+      await uxpAny.shell.openPath(launcherPath);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
   },
 
   /** 把 File token 复制到生成工作目录 */

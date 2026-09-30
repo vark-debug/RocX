@@ -152,6 +152,35 @@ async function readFallbackFile(): Promise<PersistedSettings> {
   }
 }
 
+/**
+ * 获取插件私有数据目录（pluginDataFolder）。
+ * - 用于 launcher 脚本中转 args JSON，避开 UXP `shell.openPath` 不能传参的限制。
+ * - UXP `fs.getDataFolder()` 返回的就是插件私有目录（macOS ~/Library/Application Support/UXP/<id>/，
+ *   Windows %APPDATA%\Adobe\UXP\<id>\），外部不可读，可安全写入敏感临时文件。
+ * - 缓存 promise 防止重复 IO；目录已存在则 noop。
+ */
+let _pluginDataFolderPromise: Promise<any> | null = null;
+export async function getPluginDataFolder(): Promise<any | null> {
+  if (_pluginDataFolderPromise) return _pluginDataFolderPromise;
+  _pluginDataFolderPromise = (async () => {
+    try {
+      const fs: any = (uxp as any)?.storage?.localFileSystem;
+      if (!fs?.getDataFolder) return null;
+      const folder = await fs.getDataFolder();
+      // getDataFolder 在 PR 上总是返回已存在的目录；写 JSON 时 createFile 会自动建文件
+      // 这里保险做一次 isFolder 探测（UXP File 接口提供 .isFolder / .name）
+      if (folder && typeof folder.isFolder === "function" && folder.isFolder() === false) {
+        return null;
+      }
+      return folder;
+    } catch (e) {
+      console.warn("[storage] getPluginDataFolder failed:", e);
+      return null;
+    }
+  })();
+  return _pluginDataFolderPromise;
+}
+
 async function writeFallbackFile(settings: PersistedSettings): Promise<void> {
   const fs: any = uxp.storage.localFileSystem;
   const dataFolder = await fs.getDataFolder();

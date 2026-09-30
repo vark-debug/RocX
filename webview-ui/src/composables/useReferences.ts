@@ -10,7 +10,7 @@
  *
  * 行为与原 main-webview.vue 内的函数完全一致。
  */
-import { type Ref } from "vue";
+import { type Ref, ref } from "vue";
 import { bridge } from "../services/bridge";
 import {
   type ReferenceItem,
@@ -181,6 +181,13 @@ export function useReferences(opts: {
 
   // ---------- 抓帧→PS ----------
   /**
+   * 抓帧按钮的 2 秒防抖锁。
+   * - 防止用户在 launcher 脚本中转 args JSON 完成前再次点击导致并发 PS 实例。
+   * - 暴露 psLocked 给 UI 绑定按钮 :disabled。
+   */
+  const psLocked = ref(false);
+
+  /**
    * 抓帧 + 用系统关联打开 Photoshop，UI 显示「✏ PS 中 · 修改完成」按钮。
    * 与 captureFrameAsReference 的关键区别：push 到 references 时打 pendingUpload=true，
    * **不**调 uploadInBackground；只有用户在面板点「修改完成」后才上传到 MiniMax。
@@ -188,6 +195,13 @@ export function useReferences(opts: {
    * 杜绝「刷新错传之前缓存的图片」。
    */
   async function captureFrameAndOpenInPs() {
+    // 防抖:2 秒内已有点击,直接忽略。避免并发写 args JSON / 重复启动 PS。
+    if (psLocked.value) return;
+    psLocked.value = true;
+    setTimeout(() => {
+      psLocked.value = false;
+    }, 2000);
+
     // 校验图片数量上限
     const i = opts.references.value.filter((x) => x.type === "reference_image").length;
     if (i >= 9) {
@@ -339,5 +353,6 @@ export function useReferences(opts: {
     captureFrameAndOpenInPs,
     captureVideoAsReference,
     confirmPendingUpload,
+    psLocked,
   };
 }

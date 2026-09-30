@@ -4,6 +4,8 @@ import type { ReferenceItem, FileKind } from "@shared/messages";
 
 const props = defineProps<{
   references: ReferenceItem[];
+  /** 抓帧→PS 按钮 2 秒防抖锁 */
+  psLocked?: boolean;
 }>();
 const emit = defineEmits<{
   "update:references": [ReferenceItem[]];
@@ -52,7 +54,14 @@ function showConfirmPending(ref: ReferenceItem): boolean {
       <div class="add-buttons">
         <button @click="emit('captureVideo')" type="button" class="add-btn">🎬 抓视频</button>
         <button @click="emit('captureFrame')" type="button" class="add-btn">🖼 抓帧</button>
-        <button @click="emit('captureFrameAndOpenPs')" type="button" class="add-btn">🎨 抓帧→PS</button>
+        <button
+          @click="emit('captureFrameAndOpenPs')"
+          type="button"
+          class="add-btn"
+          :class="{ 'add-btn-locked': psLocked }"
+          :disabled="psLocked"
+          :title="psLocked ? '已锁定 2 秒,避免重复启动 PS' : '抓帧后在 Photoshop 中打开'"
+        >🎨 抓帧→PS</button>
       </div>
     </div>
     <div v-if="references.length > 0" class="ref-list">
@@ -118,6 +127,12 @@ function showConfirmPending(ref: ReferenceItem): boolean {
   cursor: pointer;
   &:hover {
     background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
+  }
+  &:disabled,
+  &.add-btn-locked {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
   }
 }
 

@@ -234,6 +234,7 @@ async function refreshProject() {
     <div class="floating-prompt-bar">
       <ReferenceList
         v-model:references="references"
+        :ps-locked="refsApi.psLocked.value"
         @add="refsApi.addReference"
         @captureFrame="refsApi.captureFrameAsReference"
         @captureFrameAndOpenPs="refsApi.captureFrameAndOpenInPs"

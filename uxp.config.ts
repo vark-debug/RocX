@@ -27,7 +27,10 @@ const manifest: UXP_Manifest = {
   host: [
     {
       app: "premierepro",
-      minVersion: "22.3",
+      // Adobe UXP Hybrid Plugin 最低要求 PR 25.6(2025-06 GA)。
+      // PR < 25.6 没有 addon runtime,加载即报 "Addon is not supported"。
+      // https://developer.adobe.com/premiere-pro/uxp/plugins/hybrid-plugins/build
+      minVersion: "25.6.0",
     },
   ],
   /**
@@ -84,8 +87,24 @@ const manifest: UXP_Manifest = {
     launchProcess: {
       schemes: ["https", "slack", "file", "ws"],
       // 注意:shell.openPath 按文件扩展名走 LaunchServices(macOS)/ShellExecute(Win),
-      // 必须在白名单里才能被允许执行。抓帧→PS 路径需要 .jpg/.jpeg/.webp/.png。
-      extensions: [".xd", ".psd", ".bat", ".cmd", ".jpg", ".jpeg", ".png", ".webp", ""],
+      // 必须在白名单里才能被允许执行。抓帧→PS 路径需要:
+      //   .jpg/.jpeg/.webp/.png — 系统兜底 shell.openPath(localPath)
+      //   .psd              — launcher 脚本 COM fallback 查 .psd UserChoice
+      //   .ps1 / .command / .sh — 启动 launcher 脚本(无 C++ addon 时的 fallback 路径)
+      extensions: [
+        ".xd",
+        ".psd",
+        ".bat",
+        ".cmd",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".ps1",
+        ".command",
+        ".sh",
+        "",
+      ],
     },
     network: {
       domains: [

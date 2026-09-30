@@ -15,6 +15,7 @@
 #include <string>
 #include <cstdio>
 #include <cstring>
+#include <cstdarg>  // _snwprintf_s (CRT global, VS2026 移除了 std:: 别名)
 
 // 把 wstring 转成 UTF-8
 static std::string utf8FromWide(const std::wstring& wide) {
@@ -79,8 +80,10 @@ static bool queryJpgUserChoice(std::wstring* outExePath) {
     }
 
     LPWSTR appProgid = nullptr;
+    // VS2026 / SDK 26100: QueryCurrentDefault 第三参数改为 ASSOCIATIONLEVEL,
+    // 旧 API_NAME 是 ALE_USER_APPLICATION_REGISTRATION_FLAGS_NONE,值等同于 AL_EFFECTIVE。
     hr = pAAR->QueryCurrentDefault(L".jpg", AT_FILEEXTENSION,
-        ALE_USER_APPLICATION_REGISTRATION_FLAGS_NONE, &appProgid);
+        AL_EFFECTIVE, &appProgid);
     if (FAILED(hr) || !appProgid) {
         pAAR->Release();
         return false;
@@ -88,7 +91,8 @@ static bool queryJpgUserChoice(std::wstring* outExePath) {
 
     // 从 ProgID 取 LocalServer / shell\open\command
     wchar_t progKey[256];
-    std::_snwprintf_s(progKey, _TRUNCATE,
+    // VS2026 / MSVC 14.51 移除了 std::_snwprintf_s,改用 CRT 全局 _snwprintf_s
+    _snwprintf_s(progKey, _TRUNCATE,
         L"SOFTWARE\\Classes\\%ls\\shell\\open\\command", appProgid);
     CoTaskMemFree(appProgid);
 
@@ -125,10 +129,25 @@ OpenFileResult OpenFileInPhotoshopForPlatform(const char* utf8Path) {
         return OpenFileResult{false, "empty path"};
     }
 
-    // 1) 注册表扫描(7.0 → 30.0,覆盖 PS CS5 → ... → 2025+)
+    // 1) 注册表扫描:遍历 Adobe 已发布过的所有 PS 主版本号。
+    // Adobe 自 PS 2026 起改用 "200.0" 这种"年份/10"的整型键名(200.0 = 2026),
+    // 旧版以 7.0/8.0/.../30.0 形式存储。
+    // 浮点累加 v += 0.1f 到 200 误差累积大且 RegOpenKeyEx 调用 1900+ 次,
+    // 这里直接枚举已知版本号,稳且快。
+    static const float kKnownVersions[] = {
+        // CS5 / CS6 / CC 2013~2014
+        12.0f, 13.0f,
+        // CC 2015 ~ CC 2019(版本号 15~20)
+        15.0f, 16.0f, 17.0f, 18.0f, 19.0f, 20.0f,
+        // 2020 ~ 2025(版本号 21~25 / Adobe 偶有跳号,补 26~30 兼容)
+        21.0f, 22.0f, 23.0f, 24.0f, 25.0f, 26.0f, 27.0f, 28.0f, 29.0f, 30.0f,
+        // 2026+(键名 200.0)
+        200.0f
+    };
     std::wstring psPath;
     bool found = false;
-    for (float v = 7.0f; v <= 30.0f; v += 0.1f) {
+    for (size_t i = 0; i < sizeof(kKnownVersions) / sizeof(kKnownVersions[0]); ++i) {
+        const float v = kKnownVersions[i];
         if (readPhotoshopPathFromRegistry(HKEY_LOCAL_MACHINE, v, &psPath)) { found = true; break; }
         if (readPhotoshopPathFromRegistry(HKEY_CURRENT_USER, v, &psPath)) { found = true; break; }
     }

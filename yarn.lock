@@ -5,7 +5,7 @@
 "@adobe/cc-ext-uxp-types@*", "@adobe/cc-ext-uxp-types@https://github.com/justintaylor-dev/cc-ext-uxp-types.git":
   version "7.3.1"
   resolved "git+https://github.com/justintaylor-dev/cc-ext-uxp-types.git"
-  integrity sha512-l7GcQ0/iFkGjlC8UA5NuZYTiVKYdmyI2NDg4fIgaAoCTnZlK709a6yTB1dgMIieGqsDMid1Fer/WbaRTVjrbdw==
+  integrity sha512-6v6rOpip4JT4zJmeTyhGCiCtWNuuQrO1H0nFmBVV2DuSS4a74FDlSRYI0pVwiSG0sWeQrF2UCpOhRZgpuLkXRA==
 
 "@adobe/premierepro@*", "@adobe/premierepro@26.5.0":
   version "26.5.0"
