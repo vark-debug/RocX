@@ -97,6 +97,44 @@ nm -gU public-hybrid/mac/arm64/RocXBridge.uxpaddon | grep uxp_addon
 
 必须 **Unload → 重新 build → Load**，否则二进制被占用无法覆盖。JS/TS 侧改动可走热重载。
 
+## 9. 抓帧→PS 启动顺序（v0.3+）
+
+`openWithPhotoshopNative` 严格按以下顺序尝试拉起 Photoshop：
+
+1. **C++ Hybrid Plugin**（`RocXBridge.openFileInPhotoshop`）
+   - macOS：`NSWorkspace.openURLs:withApplicationBundleIdentifier:` + bundle id `com.adobe.Photoshop`
+   - Windows：HKLM/HKCU `SOFTWARE\Adobe\Photoshop\{12.0..200.0}\ApplicationPath` + COM fallback
+   - 要求 PR ≥ 26.2（25.6 仅有 hybrid 雏形），低于该版本报 `Addon is not supported`
+
+2. **Launcher 脚本**（`launcher.cmd` / `launcher.command`）
+   - C++ 不可用时由 `shell.openPath` 启动
+   - Windows 用 `launcher.cmd`（批处理）作为入口，`.cmd` 内部再调 `powershell -File launcher.ps1`。
+     直接传 `.ps1` 给 UXP `shell.openPath` 在某些版本会被拒（即使白名单已声明 `.ps1`），
+     `.cmd` 是 UXP 白名单里最稳的 Windows 入口。
+   - UXP `shell.openPath` 不支持额外参数 → UXP 端先把 `{path, ts}` 写到
+     `%APPDATA%\Adobe\UXP\PluginsStorage\PPRO\<ver>\Developer\<pluginId>\PluginData\rocx-launcher-args.json`（Windows）
+     或 `~/Library/Application Support/UXP/PluginsStorage/<app>/<ver>/Developer/<pluginId>/PluginData/rocx-launcher-args.json`（macOS）
+   - launcher 用 glob 搜索所有 PR 版本目录,读 args JSON 后按以下顺序找 PS 路径:
+     1. 注册表扫描 (HKLM/HKCU SOFTWARE\Adobe\Photoshop\{12.0..200.0})
+     2. 硬编码扫描 Adobe Creative Cloud 默认路径 (CC 2018 ~ 2026+)
+     3. .psd UserChoice COM fallback
+   - 找到 PS 后 `Start-Process` / `open -a` 启动;消费后立即删除 args JSON,避免重复启动
+
+**已知问题**:PR 25 启动的 PowerShell 进程读不到 `HKLM:\SOFTWARE\Adobe\Photoshop\200.0\ApplicationPath`
+(沙箱/受限 session 限制了注册表访问),所以注册表分支在这台机器上 100% 走不通,
+**实际依赖硬编码路径兜底**。如果用户把 PS 装到非默认位置,需要手动加到硬编码列表或修正注册表。
+
+3. **系统兜底**（`shell.openPath(localPath)`）
+   - 仅在 1、2 都失败时执行；走系统 jpg/psd 默认关联
+   - 用户机器上若 jpg 默认关联被改成 WPS/Photos，仍可能拉到错的预览
+   - 此时由 UI 层 toast 告知用户「PS 未检测到，已开系统默认」
+
+manifest 白名单需包含 `.ps1` / `.command` / `.sh`（已在 `uxp.config.ts` 中配置）。
+
+UXP Hybrid Plugin 脚本由 `scripts/copy-launcher-assets.js`（自定义 vite 插件）在 build/package 模式
+自动从 `public-zip/` 拷到 `dist/` 根目录；zip 模式由 `vite-uxp-plugin` 的 `copyZipAssets` 处理。
+
+
 ## 7. 签名与公证
 
 macOS 上未签名的 `.uxpaddon` 会被 Gatekeeper 拦截。发布前需：

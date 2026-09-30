@@ -1,7 +1,8 @@
 import { defineConfig } from "vite";
 import { runAction, uxp, uxpSetup } from "vite-uxp-plugin";
-import vue from "@vitejs/plugin-vue"; 
+import vue from "@vitejs/plugin-vue";
 import path from "path";
+import { copyLauncherAssets } from "./scripts/copy-launcher-assets.js";
 
 import { config } from "./uxp.config";
 
@@ -19,7 +20,11 @@ const shouldNotEmptyDir =
 export default defineConfig({
   plugins: [
     uxp(config, mode),
-    vue(), 
+    vue(),
+    // 把 public-zip/launcher.{ps1,command} 拷到 dist 根目录;
+    // vite-uxp-plugin 的 copyZipAssets 只在 mode==="zip" 时生效,
+    // build/package 模式需要这个插件补齐,launcher 脚本才能被 UXP shell.openPath 启动。
+    copyLauncherAssets({ mode }),
   ],
   build: {
     sourcemap: mode && ["dev", "build"].includes(mode) ? "inline" : false,
