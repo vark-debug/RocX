@@ -11,62 +11,54 @@
  *
  * 行为与原 main-webview.vue 完全一致。
  */
-import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onBeforeUnmount, inject } from "vue";
 import * as webviewAPI from "../webview-api";
 import { bridge } from "../services/bridge";
 import { DEFAULT_PROVIDER_ID } from "../providers/core/registry";
+import { SharedRefsKey } from "../providers/state";
 import {
   VIDEO_PARAM_CONSTRAINTS,
   type GenerationRecord,
-  type VideoModel,
-  type VideoRatio,
-  type VideoResolution,
   type VideoParamConstraints,
   type ProjectRecords,
-  type ReferenceItem,
 } from "@shared/messages";
 
 type RefAny<T> = { value: T };
 
 export function useGenerationState(opts: {
-  apiKey: RefAny<string | null>;
-  projectInfo: RefAny<{ path: string; guid: string; name: string } | null>;
-  records: RefAny<GenerationRecord[]>;
+  /** 不进 SharedRefs:storageMode 仅持久化层使用 */
   storageMode: RefAny<"primary" | "fallback">;
-  prompt: RefAny<string>;
-  model: RefAny<VideoModel>;
-  ratio: RefAny<VideoRatio>;
-  duration: RefAny<number>;
-  resolution: RefAny<VideoResolution>;
-  references: RefAny<ReferenceItem[]>;
-  settingsOpen: RefAny<boolean>;
   /** 故障恢复时，扫描到 generating 记录就调它 */
   resumePolling: (rec: GenerationRecord) => void;
   /** 取当前所有在飞任务的 record 副本（权威状态），用于切工程时保留非本工程在飞任务 */
   getInflightRecords: () => GenerationRecord[];
 }) {
+  const shared = inject(SharedRefsKey);
+  if (!shared) {
+    throw new Error("useGenerationState requires SharedRefs provider in main-webview");
+  }
   const constraints = computed<VideoParamConstraints>(
-    () => VIDEO_PARAM_CONSTRAINTS[opts.model.value],
+    () => VIDEO_PARAM_CONSTRAINTS[shared.model.value],
   );
 
   // 限制 ratio/duration/resolution 在当前模型下合法
-  watch(opts.model, () => {
+  watch(shared.model, () => {
     const c = constraints.value;
-    if (!c.resolutions.includes(opts.resolution.value)) {
-      opts.resolution.value = c.resolutions[0];
+    if (!c.resolutions.includes(shared.resolution.value)) {
+      shared.resolution.value = c.resolutions[0];
     }
-    if (!c.durations.includes(opts.duration.value)) {
-      opts.duration.value = c.durations[0];
+    if (!c.durations.includes(shared.duration.value)) {
+      shared.duration.value = c.durations[0];
     }
-    if (opts.references.value.length === 0 && !c.ratioAdaptiveAllowed) {
-      if (opts.ratio.value === "adaptive") opts.ratio.value = "16:9";
+    if (shared.references.value.length === 0 && !c.ratioAdaptiveAllowed) {
+      if (shared.ratio.value === "adaptive") shared.ratio.value = "16:9";
     }
   });
 
   // 已生成计数：只统计属于当前活动工程的记录（多工程并行时其它工程的记录不计入）
   const generatedCount = computed(() => {
-    const cur = opts.projectInfo.value;
-    return opts.records.value.filter(
+    const cur = shared.projectInfo.value;
+    return shared.records.value.filter(
       (r) => r.status === "generated" && (cur?.guid ? r.projectGuid === cur.guid : true),
     ).length;
   });
@@ -89,8 +81,8 @@ export function useGenerationState(opts: {
   async function loadRecords() {
     const live = await bridge.queryProjectState();
     if (!live.project?.path) {
-      opts.projectInfo.value = null;
-      opts.records.value = [];
+      shared.projectInfo.value = null;
+      shared.records.value = [];
       return;
     }
     const project = {
@@ -98,7 +90,7 @@ export function useGenerationState(opts: {
       guid: String(live.project.guid ?? ""),
       name: live.project.name ?? "",
     };
-    opts.projectInfo.value = project;
+    shared.projectInfo.value = project;
     const r = await bridge.recordsRead({
       projectGuid: project.guid,
       projectPath: project.path,
@@ -110,7 +102,7 @@ export function useGenerationState(opts: {
       // 取出 data 局部变量：r.data 的非空收窄在 map 回调内会丢失
       const data = r.data;
       const cur = project;
-      opts.projectInfo.value = cur;
+      shared.projectInfo.value = cur;
       // 旧 records 兼容：缺省 provider = "minimax"（Task 4 之前写入的 record 没有 provider 字段）
       const fromDisk: GenerationRecord[] = data.records.map((rec) => ({
         ...rec,
@@ -136,10 +128,10 @@ export function useGenerationState(opts: {
         if (cur.guid) return rec.projectGuid !== cur.guid;
         return rec.projectPath !== cur.path;
       });
-      opts.records.value = [...fromDisk, ...keepInflight];
+      shared.records.value = [...fromDisk, ...keepInflight];
       opts.storageMode.value = data.storageMode;
       // 故障恢复：只对本工程的 generating 记录恢复轮询（resumePolling 内部有防重复判断）
-      for (const rec of opts.records.value) {
+      for (const rec of shared.records.value) {
         const isCur = cur.guid
           ? rec.projectGuid === cur.guid
           : rec.projectPath === cur.path;
@@ -153,15 +145,15 @@ export function useGenerationState(opts: {
       // 后续生成会把记录写进那个工程的 JSON。无活动工程时直接置空，让 submitGenerate 的
       // 「无活动 PR 项目」守卫拦住提交。
       if (!r.ok && r.error === "无活动项目") {
-        opts.projectInfo.value = null;
+        shared.projectInfo.value = null;
       }
-      const cur = opts.projectInfo.value;
+      const cur = shared.projectInfo.value;
       const keepInflight = opts.getInflightRecords().filter((rec) => {
         if (!cur) return true;
         if (cur.guid) return rec.projectGuid !== cur.guid;
         return rec.projectPath !== cur.path;
       });
-      opts.records.value = [...keepInflight];
+      shared.records.value = [...keepInflight];
     }
   }
 
@@ -179,8 +171,8 @@ export function useGenerationState(opts: {
         string,
         { projectGuid: string; projectPath: string; records: GenerationRecord[] }
       >();
-      const cur = opts.projectInfo.value;
-      for (const r of opts.records.value) {
+      const cur = shared.projectInfo.value;
+      for (const r of shared.records.value) {
         // 缺归属字段的历史记录归入当前工程（与读取时的补齐逻辑一致）
         const guid = r.projectGuid ?? cur?.guid ?? "";
         const path = r.projectPath ?? cur?.path ?? "";
