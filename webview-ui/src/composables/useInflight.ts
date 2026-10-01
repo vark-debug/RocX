@@ -23,7 +23,7 @@ import { computed, shallowReactive, inject } from "vue";
 import { bridge } from "../services/bridge";
 import { usePolling } from "./usePolling";
 import { SharedRefsKey } from "../providers/state";
-import type { GenerationRecord } from "@shared/messages";
+import type { GenerationRecord, ReportPurpose } from "@shared/messages";
 
 type RefAny<T> = { value: T };
 
@@ -43,8 +43,12 @@ interface PollingStartOpts {
 }
 
 export function useInflight(opts: {
-  /** 任务进入终态 succeeded 时回调(用于飞书上报等副作用);非阻塞 */
-  onTerminalSuccess?: (rec: GenerationRecord, resp: any) => void;
+  /**
+   * 任务进入终态 succeeded 时回调(用于飞书上报等副作用);非阻塞。
+   * 不再传 resp 参数 —— 历史上把 VideoGenQueryResponse 当作 purpose 字符串传入导致
+   * webhookCore 写出"purpose=整段 server response"的 bug(V2.7 修复)。
+   */
+  onTerminalSuccess?: (rec: GenerationRecord, purpose?: ReportPurpose) => void;
 }) {
   const shared = inject(SharedRefsKey);
   if (!shared) {
@@ -154,7 +158,9 @@ export function useInflight(opts: {
                 usage: resp.usage,
               });
               // 上报飞书多维表格:fire-and-forget,不阻塞后续轮询恢复
-              if (done) opts.onTerminalSuccess?.(done, resp);
+              // 不传 purpose(由 UXP 端 webhookCore.reportGenerated 用 resolvePurpose
+              // 推断:record.upgradedFromResolution 存在 → 分辨率升级,否则 → 视频生成)
+              if (done) opts.onTerminalSuccess?.(done);
             } else {
               commitInflight(rec.id, {
                 status: "failed",
