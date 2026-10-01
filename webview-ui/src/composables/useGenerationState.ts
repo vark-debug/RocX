@@ -204,7 +204,7 @@ export function useGenerationState(opts: {
     }, 200);
   }
 
-  watch(opts.records, () => persistRecords(), { deep: true });
+  watch(shared.records, () => persistRecords(), { deep: true });
 
   // ---------- 主题 / 项目变化 ----------
   /**
