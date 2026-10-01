@@ -8,6 +8,8 @@ const props = defineProps<{
   initialSelectedId?: string;
   /** 正在生成的记录（用于在大视频预览区显示"生成中"卡片） */
   generating?: GenerationRecord | null;
+  /** 当前活动工程（PR 同进程可打开多个工程，用于判定记录归属） */
+  currentProject?: { path: string; guid: string; name?: string } | null;
 }>();
 const emit = defineEmits<{
   select: [GenerationRecord];
@@ -68,6 +70,34 @@ const {
   canvasThumbCache,
 } = preview;
 const mainVideoRef = actions.mainVideoRef;
+
+/**
+ * 多工程归属提示（PR 同一进程可打开多个工程）：
+ * 一个工程的任务在飞时切到另一个工程，这条记录仍会继续轮询并保留在列表里，
+ * 但它属于别的工程 —— 界面上需要让用户看出「这条不是当前工程的」。
+ */
+
+/** 记录是否属于其它工程（多工程并行时才有意义） */
+function isForeign(rec: GenerationRecord): boolean {
+  const cur = props.currentProject;
+  if (!cur) return false;
+  if (rec.projectGuid && cur.guid) return rec.projectGuid !== cur.guid;
+  if (rec.projectPath && cur.path) return rec.projectPath !== cur.path;
+  return false; // 无归属信息（历史记录）不提示
+}
+
+/** 其它工程的显示名：取 projectPath 的 basename（去掉扩展名） */
+function foreignProjectName(rec: GenerationRecord): string {
+  const base = (rec.projectPath || "").split(/[\\/]/).pop() || "";
+  const dot = base.lastIndexOf(".");
+  const name = dot > 0 ? base.slice(0, dot) : base;
+  return name || "未知工程";
+}
+
+/** 当前选中的记录是否属于其它工程（用于详情区「生成中」卡片提示） */
+function selectedIsForeign(): boolean {
+  return !!selected.value && isForeign(selected.value);
+}
 </script>
 
 <template>
@@ -105,6 +135,12 @@ const mainVideoRef = actions.mainVideoRef;
           :style="{ background: statusOf(rec).color }"
           :title="statusOf(rec).label"
         ></div>
+        <!-- 其它工程的记录：右上角小角标（pointer-events:none，不影响点击/拖拽） -->
+        <span
+          v-if="isForeign(rec)"
+          class="foreign-badge"
+          :title="`属于其它工程：${foreignProjectName(rec)}`"
+        >◈</span>
       </div>
     </div>
 
@@ -179,6 +215,10 @@ const mainVideoRef = actions.mainVideoRef;
             <div class="failed-msg">{{ selected.prompt }}</div>
             <div v-if="selected.taskId" class="failed-req">
               task_id: {{ selected.taskId }}
+            </div>
+            <!-- 多工程：在飞任务属于其它工程（切回该工程后才会看到它的产物） -->
+            <div v-if="selectedIsForeign()" class="foreign-task-hint">
+              ⏳ 该任务属于其它工程「{{ foreignProjectName(selected) }}」，完成后切回该工程查看
             </div>
           </div>
           <div v-else-if="selected.status === 'failed'" class="failed-card" :class="failedCardClass">

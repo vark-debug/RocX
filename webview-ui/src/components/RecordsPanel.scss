@@ -99,6 +99,24 @@
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
 
+/* 多工程：缩略图右上角归属角标（.thumb-item 已是 position:relative）
+   下移让开 .thumb-status 状态点，避免两个标记在 80px 缩略图上重叠 */
+.foreign-badge {
+  position: absolute;
+  top: 10px;
+  right: 2px;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--uxp-host-text-color, #fff);
+  background: rgba(0, 0, 0, 0.55);
+  border: 1px solid var(--uxp-host-border-color, #454545);
+  border-radius: 2px;
+  padding: 1px 2px;
+  pointer-events: none;   /* 不拦截 thumb-item 的点击 / 拖拽 */
+  user-select: none;
+  z-index: 1;
+}
+
 /* 右列：详情 */
 .detail-column {
   flex: 1;
@@ -323,6 +341,15 @@
   height: 3px;
   background: rgba(75, 156, 245, 0.1);
   overflow: hidden;
+}
+/* 多工程：在飞任务属于其它工程时的弱化提示行 */
+.foreign-task-hint {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  opacity: 0.7;
+  color: var(--uxp-host-link-text-color, #4b9cf5);
+  word-break: break-word;
 }
 .generating-bar-fill {
   height: 100%;
