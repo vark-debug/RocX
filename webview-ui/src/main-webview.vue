@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // ---- 轻量 toast：UXP webview 不可依赖原生 alert ----
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, provide } from "vue";
 import * as webviewAPI from "./webview-api";
 import { initWebview } from "./webview-setup";
 import { setBridge, bridge } from "./services/bridge";
 
 import { useGenerationState } from "./composables/useGenerationState";
+import { SharedRefsKey } from "./providers/state";
 import { useReferences } from "./composables/useReferences";
 import { useInflight } from "./composables/useInflight";
 import { useFeishuReport } from "./composables/useFeishuReport";
@@ -88,6 +89,22 @@ const resolution = ref<VideoResolution>("768P");
 const references = ref<ReferenceItem[]>([]);
 const settingsOpen = ref(false);
 const selectedRecordId = ref<string | null>(null);
+
+// ---------- provide: 共享 refs 给 composables(V5.2) ----------
+// 10 个高频 ref 集中暴露给 useGenerationState / useSubmit / useImport 等
+// composable,避免 props 透传噪音。composable 内部通过 inject(SharedRefsKey) 拿。
+provide(SharedRefsKey, {
+  apiKey,
+  projectInfo,
+  records,
+  prompt,
+  model,
+  ratio,
+  duration,
+  resolution,
+  references,
+  selectedRecordId,
+});
 
 // ---------- 在飞任务登记表 + 飞书上报(顶层单例) ----------
 // 多个 composable 需要共享同一个 inflight / polling_ / newTaskUi,以支持
