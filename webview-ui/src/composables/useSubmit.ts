@@ -18,6 +18,7 @@ import { ref } from "vue";
 import { bridge } from "../services/bridge";
 import { MiniMaxProvider } from "../providers/minimax";
 import { getCaptureContext, resetCaptureContext } from "./useCaptureContext";
+import { safeProviderCall } from "./useProviderSafe";
 import { REPORT_PURPOSE } from "@shared/messages";
 import type {
   GenerationRecord,
@@ -185,68 +186,70 @@ export function useSubmit(opts: {
     resetCaptureContext();
     // 提交成功后 ratio=adaptive 在无 references 时不合法,自动回退到 16:9,
     // 让用户在继续输入 prompt 后「生成」按钮可立即可点。
-    if (opts.ratio.value === "adaptive") {
+if (opts.ratio.value === "adaptive") {
       opts.ratio.value = "16:9";
     }
 
-try {
-      const mini = new MiniMaxProvider();
-      const reqPayload: VideoGenCreateRequest = {
-        model: opts.model.value,
-        prompt: newRec.prompt,
-        ratio: opts.ratio.value,
-        duration: opts.duration.value,
-        resolution: opts.resolution.value,
-        references: newRec.references,
-      };
-      if (__ROCX_DRY_RUN__) {
-        // 调试模式：仅打印请求，不实际发送
-        // dry-run 在新 provider 架构下不再构建真实 payload，返回 mock task_id
-        const task_id = `dryrun_${Date.now()}`;
-        console.log(
-          "%c[MiniMax createVideo DRY-RUN]",
-          "color:#4b9cf5;font-weight:bold",
-          "(provider 架构下 dry-run 不发请求,只返回 mock task_id)",
-          JSON.stringify(reqPayload),
-        );
-        const idx = opts.records.value.findIndex((r) => r.id === id);
-        if (idx >= 0) {
-          opts.records.value[idx] = {
-            ...opts.records.value[idx],
-            taskId: task_id,
-            status: "generating",
-            // @ts-ignore
-            dryRunPayload: null,
-          };
-        }
-        console.log(
-          "[MiniMax dry-run] 已写入 record.taskId =",
-          task_id,
-          "(dry-run 不会真正创建任务,不会启动轮询)",
-        );
-      } else {
-        // 实发模式
-        const r = await mini.createVideo(reqPayload, opts.apiKey.value);
-        const task_id = r.taskId;
-        const idx = opts.records.value.findIndex((r) => r.id === id);
-        if (idx >= 0) {
-          opts.records.value[idx] = {
-            ...opts.records.value[idx],
-            taskId: task_id,
-            status: "generating",
-          };
-        }
-        resumePolling({ ...newRec, taskId: task_id, status: "generating" });
-      }
-    } catch (e: any) {
+    const mini = new MiniMaxProvider();
+    const reqPayload: VideoGenCreateRequest = {
+      model: opts.model.value,
+      prompt: newRec.prompt,
+      ratio: opts.ratio.value,
+      duration: opts.duration.value,
+      resolution: opts.resolution.value,
+      references: newRec.references,
+    };
+    if (__ROCX_DRY_RUN__) {
+      // 调试模式：仅打印请求，不实际发送
+      // dry-run 在新 provider 架构下不再构建真实 payload，返回 mock task_id
+      const task_id = `dryrun_${Date.now()}`;
+      console.log(
+        "%c[MiniMax createVideo DRY-RUN]",
+        "color:#4b9cf5;font-weight:bold",
+        "(provider 架构下 dry-run 不发请求,只返回 mock task_id)",
+        JSON.stringify(reqPayload),
+      );
       const idx = opts.records.value.findIndex((r) => r.id === id);
       if (idx >= 0) {
         opts.records.value[idx] = {
           ...opts.records.value[idx],
-          status: "failed",
-          error: toRecordError(e),
+          taskId: task_id,
+          status: "generating",
+          // @ts-ignore
+          dryRunPayload: null,
         };
       }
+      console.log(
+        "[MiniMax dry-run] 已写入 record.taskId =",
+        task_id,
+        "(dry-run 不会真正创建任务,不会启动轮询)",
+      );
+    } else {
+      // 实发模式:用 safeProviderCall 把 throw 转 {ok, error},失败直接写 record.error
+      const r = await safeProviderCall(() =>
+        mini.createVideo(reqPayload, opts.apiKey.value),
+      );
+      if (!r.ok) {
+        const idx = opts.records.value.findIndex((rec) => rec.id === id);
+        if (idx >= 0) {
+          opts.records.value[idx] = {
+            ...opts.records.value[idx],
+            status: "failed",
+            error: r.error,
+          };
+        }
+        return;
+      }
+      const task_id = r.data.taskId;
+      const idx = opts.records.value.findIndex((rec) => rec.id === id);
+      if (idx >= 0) {
+        opts.records.value[idx] = {
+          ...opts.records.value[idx],
+          taskId: task_id,
+          status: "generating",
+        };
+      }
+      resumePolling({ ...newRec, taskId: task_id, status: "generating" });
     }
   }
 
@@ -324,33 +327,35 @@ try {
     };
     opts.records.value.unshift(upgradeRec);
 
-    try {
-      const mini = new MiniMaxProvider();
-      const r = await mini.regenerateVideo!({
+    const mini = new MiniMaxProvider();
+    const r = await safeProviderCall(() =>
+      mini.regenerateVideo!({
         sourceTaskId: rec.taskId,
         resolution: "2K",
         apiKey: opts.apiKey.value,
-      });
-      const task_id = r.taskId;
-      const idx = opts.records.value.findIndex((r) => r.id === id);
-      if (idx >= 0) {
-        opts.records.value[idx] = {
-          ...opts.records.value[idx],
-          taskId: task_id,
-          status: "generating",
-        };
-      }
-      resumePolling({ ...upgradeRec, taskId: task_id, status: "generating" });
-    } catch (e: any) {
-      const idx = opts.records.value.findIndex((r) => r.id === id);
+      }),
+    );
+    if (!r.ok) {
+      const idx = opts.records.value.findIndex((rec) => rec.id === id);
       if (idx >= 0) {
         opts.records.value[idx] = {
           ...opts.records.value[idx],
           status: "failed",
-          error: toRecordError(e),
+          error: r.error,
         };
       }
+      return;
     }
+    const task_id = r.data.taskId;
+    const idx = opts.records.value.findIndex((rec) => rec.id === id);
+    if (idx >= 0) {
+      opts.records.value[idx] = {
+        ...opts.records.value[idx],
+        taskId: task_id,
+        status: "generating",
+      };
+    }
+    resumePolling({ ...upgradeRec, taskId: task_id, status: "generating" });
   }
 
   // ---------- 优化提示词 ----------
@@ -424,77 +429,79 @@ try {
       projectPath: opts.projectInfo.value?.path,
     };
 
-    try {
-      const mini = new MiniMaxProvider();
-      const r = await mini.submitOptimizePrompt!({
+    const mini = new MiniMaxProvider();
+    const r = await safeProviderCall(() =>
+      mini.submitOptimizePrompt!({
         prompt: opts.prompt.value,
         duration: opts.duration.value,
         ratio: ratioArg,
         references: validRefs,
         apiKey: opts.apiKey.value,
-      });
-      const task_id = r.taskId;
-      // 占位 record 写入 records,便于统一走 polling 流;status 始终为 'generating'
-      const optimizeRunRec: GenerationRecord = {
-        ...optimizeRec,
-        taskId: task_id,
-        status: "generating",
-      };
-      opts.records.value.unshift(optimizeRunRec);
-      // 登记进在飞任务表(generating / pollingActive 由它派生)
-      inflight.set(id, { record: optimizeRunRec, polling: true });
-      polling_.start({
-        taskId: task_id,
-        apiKey: opts.apiKey.value,
-        intervalMs: 3000, // IR 任务通常很快(秒级),3s 轮询体验更好
-        onUpdate: (resp) => {
-          commitInflight(id, { lastPolledAt: new Date().toISOString() });
-        },
-        onTerminal: (resp, err) => {
-          // 所有分支(含提前 return)都要把该 id 从在飞表摘除
-          try {
-            const idx = opts.records.value.findIndex((r) => r.id === id);
-            if (idx >= 0) {
-              // 删除占位 record(用户不需要在历史里看到一条"优化任务")
-              opts.records.value.splice(idx, 1);
-            }
-            if (err) {
-              console.error("[webview] optimizePrompt poll error:", err);
-              opts.showToast(`优化失败: ${err.message || err}`);
-              return;
-            }
-            if (!resp) {
-              opts.showToast("优化失败:查询无响应");
-              return;
-            }
-            if (resp.status === "succeeded") {
-              // 优化任务同样消耗额度,无论是否取到 content.prompt 都要上报。
-              // 占位记录已被移除,这里带上 usage 供 UXP 端按 token 计费。
-              opts.reportToFeishu(
-                { ...optimizeRec, usage: resp.usage },
-                REPORT_PURPOSE.PROMPT_OPT,
-              );
-              const optimized = resp.content?.prompt;
-              if (optimized) {
-                opts.prompt.value = optimized;
-                opts.showToast("提示词已优化");
-              } else {
-                opts.showToast("优化成功但响应缺 content.prompt");
-              }
-            } else if (resp.status === "failed" || resp.status === "cancelled") {
-              opts.showToast(`优化失败: ${resp.error?.message || resp.status}`);
-            }
-            optimizingPrompt.value = false;
-          } finally {
-            inflight.delete(id);
-          }
-        },
-      });
-    } catch (e: any) {
-      console.error("[webview] optimizePrompt failed:", e);
-      opts.showToast(`优化失败: ${e?.message || e}`);
+      }),
+    );
+    if (!r.ok) {
+      console.error("[webview] optimizePrompt failed:", r.error);
+      opts.showToast(`优化失败: ${r.error.message}`);
       optimizingPrompt.value = false;
+      return;
     }
+    const task_id = r.data.taskId;
+    // 占位 record 写入 records,便于统一走 polling 流;status 始终为 'generating'
+    const optimizeRunRec: GenerationRecord = {
+      ...optimizeRec,
+      taskId: task_id,
+      status: "generating",
+    };
+    opts.records.value.unshift(optimizeRunRec);
+    // 登记进在飞任务表(generating / pollingActive 由它派生)
+    inflight.set(id, { record: optimizeRunRec, polling: true });
+    polling_.start({
+      taskId: task_id,
+      apiKey: opts.apiKey.value,
+      intervalMs: 3000, // IR 任务通常很快(秒级),3s 轮询体验更好
+      onUpdate: (resp) => {
+        commitInflight(id, { lastPolledAt: new Date().toISOString() });
+      },
+      onTerminal: (resp, err) => {
+        // 所有分支(含提前 return)都要把该 id 从在飞表摘除
+        try {
+          const idx = opts.records.value.findIndex((r) => r.id === id);
+          if (idx >= 0) {
+            // 删除占位 record(用户不需要在历史里看到一条"优化任务")
+            opts.records.value.splice(idx, 1);
+          }
+          if (err) {
+            console.error("[webview] optimizePrompt poll error:", err);
+            opts.showToast(`优化失败: ${err.message || err}`);
+            return;
+          }
+          if (!resp) {
+            opts.showToast("优化失败:查询无响应");
+            return;
+          }
+          if (resp.status === "succeeded") {
+            // 优化任务同样消耗额度,无论是否取到 content.prompt 都要上报。
+            // 占位记录已被移除,这里带上 usage 供 UXP 端按 token 计费。
+            opts.reportToFeishu(
+              { ...optimizeRec, usage: resp.usage },
+              REPORT_PURPOSE.PROMPT_OPT,
+            );
+            const optimized = resp.content?.prompt;
+            if (optimized) {
+              opts.prompt.value = optimized;
+              opts.showToast("提示词已优化");
+            } else {
+              opts.showToast("优化成功但响应缺 content.prompt");
+            }
+          } else if (resp.status === "failed" || resp.status === "cancelled") {
+            opts.showToast(`优化失败: ${resp.error?.message || resp.status}`);
+          }
+          optimizingPrompt.value = false;
+        } finally {
+          inflight.delete(id);
+        }
+      },
+    });
   }
 
   return {
