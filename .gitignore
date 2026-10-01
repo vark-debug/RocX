@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# TypeScript 增量构建缓存
+*.tsbuildinfo
+
 # 项目使用 yarn，忽略 npm 锁文件
 package-lock.json
 
