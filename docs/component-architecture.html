@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RocX 组件结构关系图</title>
+  <style>
+    :root {
+      --bg: #fafbfc;
+      --surface: #ffffff;
+      --surface-2: #f6f8fa;
+      --border: #d0d7de;
+      --border-soft: #e5e9ee;
+      --text: #1f2328;
+      --text-soft: #57606a;
+      --text-muted: #8b949e;
+      --uxp-bg: #fff8e1;
+      --uxp-bg-2: #fff3c4;
+      --uxp-border: #d4a017;
+      --uxp-accent: #b45309;
+      --web-bg: #e0e7ff;
+      --web-bg-2: #c7d2fe;
+      --web-border: #4f46e5;
+      --web-accent: #3730a3;
+      --bridge-bg: #fae8ff;
+      --bridge-border: #a21caf;
+      --bridge-accent: #86198f;
+      --shared-bg: #f1f5f9;
+      --shared-border: #475569;
+      --shared-accent: #1e293b;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --code-bg: #0d1117;
+      --code-text: #c9d1d9;
+      --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+      --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+      --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+
+    code, pre, .mono {
+      font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+      font-size: 0.88em;
+    }
+
+    .container {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+
+    /* ---------- Header ---------- */
+    header.hero {
+      padding: 32px 0 28px;
+      border-bottom: 1px solid var(--border-soft);
+      margin-bottom: 32px;
+    }
+
+    header.hero .badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--text-soft);
+      border: 1px solid var(--border-soft);
+    }
+
+    .badge.uxp { background: var(--uxp-bg); color: var(--uxp-accent); border-color: var(--uxp-border); }
+    .badge.web { background: var(--web-bg); color: var(--web-accent); border-color: var(--web-border); }
+    .badge.bridge { background: var(--bridge-bg); color: var(--bridge-accent); border-color: var(--bridge-border); }
+    .badge.shared { background: var(--shared-bg); color: var(--shared-accent); border-color: var(--shared-border); }
+
+    header.hero h1 {
+      font-size: 32px;
+      margin: 0 0 8px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    header.hero p {
+      margin: 0;
+      color: var(--text-soft);
+      font-size: 15px;
+    }
+
+    /* ---------- Stats strip ---------- */
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px;
+      margin-bottom: 36px;
+    }
+
+    .stat {
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      padding: 14px 16px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .stat .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+    .stat .value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+
+    /* ---------- Section header ---------- */
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 36px 0 14px;
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    .section-title .pill-icon {
+      width: 28px; height: 28px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center; justify-content: center;
+      font-size: 16px;
+      color: #fff;
+    }
+
+    .pill-icon.uxp { background: var(--uxp-border); }
+    .pill-icon.web { background: var(--web-border); }
+    .pill-icon.bridge { background: var(--bridge-border); }
+
+    /* ---------- 跨端桥接总览 ---------- */
+    .bridge-summary {
+      background: linear-gradient(135deg, var(--uxp-bg) 0%, var(--surface) 50%, var(--web-bg) 100%);
+      border: 1px solid var(--border-soft);
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 32px;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 24px;
+      align-items: center;
+      box-shadow: var(--shadow-md);
+    }
+
+    .bridge-side {
+      padding: 12px 16px;
+      background: var(--surface);
+      border-radius: 10px;
+      border: 1px solid var(--border-soft);
+    }
+
+    .bridge-side h3 { margin: 0 0 4px; font-size: 14px; }
+    .bridge-side .file { color: var(--text-muted); font-size: 12px; }
+
+    .bridge-arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      color: var(--bridge-accent);
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .bridge-arrow svg {
+      animation: flow 1.6s linear infinite;
+    }
+
+    @keyframes flow {
+      0%, 100% { transform: translateX(0); opacity: 0.85; }
+      50% { transform: translateX(4px); opacity: 1; }
+    }
+
+    /* ---------- 两端并排 ---------- */
+    .duo {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    @media (max-width: 980px) {
+      .duo { grid-template-columns: 1fr; }
+      .bridge-summary { grid-template-columns: 1fr; }
+      .bridge-arrow { transform: rotate(90deg); }
+    }
+
+    /* ---------- 端卡片 ---------- */
+    .side {
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .side.uxp { border-top: 4px solid var(--uxp-border); }
+    .side.web { border-top: 4px solid var(--web-border); }
+
+    .side header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+      padding-bottom: 12px;
+      border-bottom: 1px dashed var(--border-soft);
+    }
+
+    .side header h2 { margin: 0; font-size: 17px; font-weight: 600; }
+    .side header .path { font-size: 12px; color: var(--text-muted); }
+
+    /* ---------- 模块盒子 ---------- */
+    .module {
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 12px;
+      background: var(--surface);
+      transition: box-shadow 0.18s ease, transform 0.18s ease;
+    }
+
+    .module:hover {
+      box-shadow: var(--shadow-md);
+      transform: translateY(-1px);
+    }
+
+    .module .head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .module .name {
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    .module .name .path {
+      color: var(--text-muted);
+      font-weight: 400;
+      font-size: 11px;
+      margin-left: 6px;
+    }
+
+    .module .desc {
+      font-size: 12.5px;
+      color: var(--text-soft);
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .module ul.methods {
+      list-style: none;
+      padding: 0;
+      margin: 6px 0 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px 6px;
+    }
+
+    .module ul.methods li {
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 11px;
+      color: var(--text-soft);
+    }
+
+    /* 层级配色 */
+    .module.layer-infrastructure { background: #fef9c3; border-color: #facc15; }
+    .module.layer-io { background: #fed7aa; border-color: #fb923c; }
+    .module.layer-business { background: #fbcfe8; border-color: #f472b6; }
+    .module.layer-ai { background: #ddd6fe; border-color: #8b5cf6; }
+    .module.layer-facade { background: #fef3c7; border-color: #d4a017; }
+
+    .module.layer-state { background: #c7d2fe; border-color: #6366f1; }
+    .module.layer-composable { background: #bfdbfe; border-color: #3b82f6; }
+    .module.layer-service { background: #ddd6fe; border-color: #6366f1; }
+    .module.layer-provider { background: #a5b4fc; border-color: #4f46e5; }
+    .module.layer-component { background: #e0e7ff; border-color: #818cf8; }
+
+    /* ---------- 嵌套子模块 ---------- */
+    .sub-modules {
+      margin: 6px 0 0 12px;
+      padding-left: 12px;
+      border-left: 2px solid var(--border-soft);
+    }
+
+    .sub-modules .module {
+      background: var(--surface);
+      padding: 8px 10px;
+      margin-bottom: 6px;
+    }
+
+    /* ---------- 依赖小标签 ---------- */
+    .deps {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 8px;
+    }
+
+    .deps .dep {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--text-soft);
+      border: 1px solid var(--border-soft);
+    }
+
+    .deps .dep.arrow::before {
+      content: "→ ";
+      color: var(--text-muted);
+    }
+
+    /* ---------- Section: API table ---------- */
+    table.api-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      overflow: hidden;
+      font-size: 13px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .api-table thead {
+      background: var(--surface-2);
+    }
+
+    .api-table th {
+      text-align: left;
+      padding: 10px 14px;
+      font-weight: 600;
+      color: var(--text-soft);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      border-bottom: 1px solid var(--border-soft);
+    }
+
+    .api-table td {
+      padding: 10px 14px;
+      border-top: 1px solid var(--border-soft);
+      vertical-align: top;
+    }
+
+    .api-table tr:hover { background: var(--surface-2); }
+
+    .api-table .method {
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      color: var(--bridge-accent);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .api-table .target {
+      color: var(--uxp-accent);
+      font-size: 12px;
+    }
+
+    /* ---------- Data flow ---------- */
+    .flow {
+      display: grid;
+      gap: 12px;
+    }
+
+    .flow-step {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 14px;
+      padding: 14px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 10px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .flow-step .num {
+      width: 28px; height: 28px;
+      border-radius: 50%;
+      background: var(--bridge-border);
+      color: #fff;
+      display: inline-flex;
+      align-items: center; justify-content: center;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .flow-step .body .from { font-size: 12px; color: var(--text-muted); margin-bottom: 2px; }
+    .flow-step .body .what { font-size: 14px; }
+    .flow-step .body .what code {
+      background: var(--surface-2);
+      border: 1px solid var(--border-soft);
+      padding: 1px 6px;
+      border-radius: 4px;
+      color: var(--bridge-accent);
+      font-size: 12.5px;
+    }
+
+    /* ---------- Legend ---------- */
+    .legend {
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-top: 24px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 24px;
+      font-size: 12.5px;
+      color: var(--text-soft);
+    }
+
+    .legend .item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .legend .swatch {
+      width: 14px; height: 14px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    /* ---------- Footer ---------- */
+    footer.bottom {
+      margin-top: 48px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border-soft);
+      color: var(--text-muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    /* ---------- SVG diagram ---------- */
+    .diagram-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border-soft);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: var(--shadow-sm);
+      overflow-x: auto;
+    }
+    .tree { font-size: 13px; line-height: 1.6; }
+    .tree ul { list-style: none; padding-left: 22px; border-left: 1px dashed var(--border-soft); margin: 4px 0 4px 8px; }
+    .tree li { margin: 2px 0; position: relative; }
+    .tree li::before {
+      content: "";
+      position: absolute;
+      left: -22px; top: 12px;
+      width: 14px;
+      border-top: 1px dashed var(--border);
+    }
+    .tree-toggle {
+      cursor: pointer;
+      user-select: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      transition: background 0.15s;
+    }
+    .tree-toggle:hover { background: var(--surface-2); }
+    .tree-toggle::before {
+      content: "▸";
+      color: var(--text-muted);
+      transition: transform 0.15s;
+      display: inline-block;
+      width: 14px;
+    }
+    .tree-toggle.open::before { transform: rotate(90deg); }
+    .tree-toggle .label { font-weight: 600; }
+    .tree-toggle .file { color: var(--text-muted); font-weight: 400; font-size: 11px; margin-left: 4px; }
+    .tree > ul { display: none; }
+    .tree > li.open > ul { display: block; }
+    .tree > li.open > ul.loose { display: flex; flex-wrap: wrap; gap: 4px 14px; border-left: none; padding-left: 0; margin-left: 22px; }
+    .tree > li.open > ul.loose li::before { display: none; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <header class="hero">
+    <div class="badges">
+      <span class="badge uxp">UXP 端</span>
+      <span class="badge web">WebView 端</span>
+      <span class="badge bridge">Comlink 桥</span>
+      <span class="badge shared">共享类型</span>
+      <span class="badge">v2 重构后</span>
+    </div>
+    <h1>RocX 组件结构关系</h1>
+    <p>Adobe Premiere Pro UXP 插件 · 双进程桥接架构 · 2026-10-01 快照</p>
+  </header>
+
+  <!-- 元数据条 -->
+  <div class="stats">
+    <div class="stat"><div class="label">UXP 端核心模块</div><div class="value">14</div></div>
+    <div class="stat"><div class="label">WebView Composables</div><div class="value">10</div></div>
+    <div class="stat"><div class="label">Vue 组件</div><div class="value">7</div></div>
+    <div class="stat"><div class="label">桥接方法 (UxptoWebviewAPI)</div><div class="value">30</div></div>
+    <div class="stat"><div class="label">共享类型</div><div class="value">14+</div></div>
+    <div class="stat"><div class="label">共享 Composable 实例</div><div class="value">1 (useInflight)</div></div>
+  </div>
+
+  <!-- 跨端桥接总览 -->
+  <div class="section-title">
+    <span class="pill-icon bridge">⇄</span>
+    跨端桥接
+  </div>
+  <div class="bridge-summary">
+    <div class="bridge-side uxp" style="border-left: 3px solid var(--uxp-border);">
+      <h3>UXP 端 host</h3>
+      <div class="file mono">src/webview-setup-host.ts</div>
+      <div class="desc" style="margin-top: 6px;">
+        <code>Comlink.expose(api, endpoint)</code> 把 <code>api</code> 对象暴露给 WebView；
+        同时订阅 <code>premiereProjectChanged</code> 事件并转发到 WebView。
+      </div>
+    </div>
+
+    <div class="bridge-arrow">
+      <svg width="64" height="32" viewBox="0 0 64 32" fill="none">
+        <line x1="0" y1="16" x2="56" y2="16" stroke="currentColor" stroke-width="2" stroke-dasharray="6 4"/>
+        <path d="M52 8 L60 16 L52 24" stroke="currentColor" stroke-width="2" fill="none"/>
+      </svg>
+      Comlink
+    </div>
+
+    <div class="bridge-side web" style="border-left: 3px solid var(--web-border);">
+      <h3>WebView 端</h3>
+      <div class="file mono">webview-ui/src/webview-setup.ts</div>
+      <div class="desc" style="margin-top: 6px;">
+        <code>Comlink.wrap(endpoint)</code> 把远端代理包装为本地对象，
+        <code>services/bridge.ts</code> 把 30 个方法显式封装为 <code>bridge.X()</code>。
+      </div>
+    </div>
+  </div>
+
+  <!-- 两端并排 -->
+  <div class="duo">
+
+    <!-- ============ UXP 端 ============ -->
+    <article class="side uxp">
+      <header>
+        <h2>UXP 端</h2>
+        <span class="path">Adobe Premiere Pro 进程 · src/</span>
+      </header>
+
+      <!-- 入口 -->
+      <div class="module layer-facade">
+        <div class="head">
+          <span class="name">入口 / Webview Host<span class="path">index-vue.ts · main.vue · webview-setup-host.ts</span></span>
+        </div>
+        <div class="desc">
+          <code>createApp(App).mount("#app")</code> → <code>&lt;webview&gt;</code> 嵌入 webview-ui →
+          <code>webviewInitHost()</code> 初始化 Comlink 一侧。
+        </div>
+      </div>
+
+      <!-- 桥接聚合 -->
+      <div class="module layer-facade">
+        <div class="head">
+          <span class="name">API 聚合 facade<span class="path">src/api/api.ts</span></span>
+        </div>
+        <div class="desc">
+          <code>export const api = { ...30 methods }</code> ；
+          每个方法委托到下层 <code>core/*</code> 模块。
+        </div>
+        <ul class="methods">
+          <li>recordsRead/Write</li>
+          <li>importToProject</li>
+          <li>captureActiveFrame</li>
+          <li>openInPhotoshop</li>
+          <li>downloadFile</li>
+          <li>reportGenerated</li>
+          <li>insertToTimeline</li>
+          <li>...</li>
+        </ul>
+        <div class="deps">
+          <span class="dep">core/records</span>
+          <span class="dep arrow">core/import</span>
+          <span class="dep arrow">core/frames</span>
+          <span class="dep arrow">core/captureVideo</span>
+          <span class="dep arrow">core/webhook</span>
+          <span class="dep arrow">core/timeline</span>
+          <span class="dep arrow">core/files</span>
+          <span class="dep arrow">core/ai/upload</span>
+          <span class="dep arrow">core/ai/download</span>
+          <span class="dep arrow">core/storage</span>
+        </div>
+      </div>
+
+      <!-- 基础设施层 -->
+      <div class="module layer-infrastructure">
+        <div class="head">
+          <span class="name">基础设施层</span>
+        </div>
+        <div class="desc">URL 转换 / 文件系统抽象 / 无 core/内部依赖</div>
+        <div class="sub-modules">
+          <div class="module layer-infrastructure">
+            <div class="head"><span class="name">pathUtils.ts</span></div>
+            <div class="desc">nativePath ↔ file:// URL · getFs · getFileByPath · getEntryAnyPath</div>
+          </div>
+          <div class="module layer-infrastructure">
+            <div class="head"><span class="name">workDir.ts</span></div>
+            <div class="desc">plugin-data 工作目录 · ensureProjectSubdir · 价格常量</div>
+            <div class="deps"><span class="dep arrow">pathUtils</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- IO 层 -->
+      <div class="module layer-io">
+        <div class="head">
+          <span class="name">文件 IO 层</span>
+        </div>
+        <div class="desc">依赖 pathUtils,无业务逻辑</div>
+        <div class="sub-modules">
+          <div class="module layer-io">
+            <div class="head"><span class="name">fileIO.ts</span></div>
+            <div class="desc">pickFileByKind · pickAndValidate · copyToProject · moveFileToDir · waitForFileReady*</div>
+            <div class="deps"><span class="dep arrow">pathUtils</span><span class="dep arrow">workDir</span></div>
+          </div>
+          <div class="module layer-io">
+            <div class="head"><span class="name">psLauncher.ts</span></div>
+            <div class="desc">三段 fallback 启动 Photoshop (C++ addon → launcher → 系统兜底)</div>
+            <div class="deps"><span class="dep arrow">pathUtils</span><span class="dep arrow">storage</span></div>
+          </div>
+          <div class="module layer-io">
+            <div class="head"><span class="name">previewUrl.ts</span></div>
+            <div class="desc">toLocalFileUrl (preview-cache) · readAsDataUrl (base64)</div>
+            <div class="deps"><span class="dep arrow">pathUtils</span><span class="dep arrow">fileIO</span><span class="dep arrow">workDir</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 业务层 -->
+      <div class="module layer-business">
+        <div class="head">
+          <span class="name">业务层 (核心)</span>
+        </div>
+        <div class="desc">Premiere Pro 业务编排 · 记录读写 · 时间线插入 · 飞书上报</div>
+        <div class="sub-modules">
+          <div class="module layer-business">
+            <div class="head"><span class="name">captureBase.ts (共享工具)</span></div>
+            <div class="desc">ownerOf · pollForNewestFile · encodeDataUrlFromEntry · uploadReferenceFile</div>
+            <div class="deps"><span class="dep arrow">files</span><span class="dep arrow">storage</span><span class="dep arrow">ai/upload</span></div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">frames.ts</span></div>
+            <div class="desc">captureActiveFrame / captureOnlyAsReference · framesCore</div>
+            <div class="deps"><span class="dep arrow">captureBase</span><span class="dep arrow">files</span></div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">captureVideo.ts</span></div>
+            <div class="desc">captureWorkAreaOnlyAsReference · captureVideoCore</div>
+            <div class="deps"><span class="dep arrow">captureBase</span><span class="dep arrow">files</span></div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">import.ts</span></div>
+            <div class="desc">移动生成结果 → 项目旁 Imports → importFiles · importCore</div>
+            <div class="deps"><span class="dep arrow">files</span><span class="dep arrow">records</span><span class="dep arrow">project</span><span class="dep arrow">workDir</span></div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">timeline.ts</span></div>
+            <div class="desc">lockedAccess + executeTransaction 插入时间线 · timelineCore</div>
+            <div class="deps"><span class="dep arrow">files</span></div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">records.ts</span></div>
+            <div class="desc">JSON 读写 · 归属路由(主路径/降级) · recordsCore</div>
+            <div class="deps"><span class="dep arrow">pathUtils</span><span class="dep arrow">project</span></div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">storage.ts</span></div>
+            <div class="desc">API Key / 飞书 token 持久化 (secureStorage 优先) · storage</div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">webhook.ts</span></div>
+            <div class="desc">飞书多维表格上报 · 限流退避 · webhookCore</div>
+            <div class="deps"><span class="dep arrow">billing</span><span class="dep arrow">project</span><span class="dep arrow">storage</span></div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">project.ts</span></div>
+            <div class="desc">premierepro.Project 监听 · projectCore</div>
+          </div>
+          <div class="module layer-business">
+            <div class="head"><span class="name">billing.ts</span></div>
+            <div class="desc">价格表 + estimateCost (按 purpose 分档) · 独立模块</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Provider 抽象 -->
+      <div class="module layer-ai">
+        <div class="head">
+          <span class="name">AI Provider 抽象<span class="path">src/core/ai/</span></span>
+        </div>
+        <div class="desc">UxPProvider 接口 · upload/download shim → registry → 具体 provider 实现</div>
+        <div class="sub-modules">
+          <div class="module layer-ai">
+            <div class="head"><span class="name">ai/providers/types.ts</span></div>
+            <div class="desc">UxPProvider 接口 (uploadFile / downloadToWorkDir)</div>
+          </div>
+          <div class="module layer-ai">
+            <div class="head"><span class="name">ai/providers/registry.ts</span></div>
+            <div class="desc">Provider 注册 · getUxPProvider(id) · 默认 miniMax</div>
+          </div>
+          <div class="module layer-ai">
+            <div class="head"><span class="name">ai/providers/minimax/</span></div>
+            <div class="desc">MiniMaxUxPProvider: multipart 上传到 api.minimax.cn/v1/files/upload</div>
+            <div class="deps"><span class="dep arrow">files</span><span class="dep arrow">workDir</span></div>
+          </div>
+          <div class="module layer-ai">
+            <div class="head"><span class="name">ai/upload.ts + ai/download.ts</span></div>
+            <div class="desc">null shim,仅转发到 registry</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- facade -->
+      <div class="module layer-facade">
+        <div class="head">
+          <span class="name">files.ts (facade)</span>
+        </div>
+        <div class="desc">
+          <code>filesCore = { ...workDirCore, ...fileIOCore, ...psLauncherCore, ...previewUrlCore }</code>
+          + 3 行 pathUtils 透传。40 行的薄壳,外部 API 表面与重构前一致。
+        </div>
+      </div>
+
+      <!-- globals -->
+      <div class="module layer-infrastructure">
+        <div class="head">
+          <span class="name">globals.ts</span>
+        </div>
+        <div class="desc"><code>require("uxp")</code> / <code>require("premierepro")</code> 按 hostName 条件加载</div>
+      </div>
+
+    </article>
+
+    <!-- ============ WebView 端 ============ -->
+    <article class="side web">
+      <header>
+        <h2>WebView 端</h2>
+        <span class="path">Vue 面板进程 · webview-ui/src/</span>
+      </header>
+
+      <!-- 入口 -->
+      <div class="module layer-component">
+        <div class="head">
+          <span class="name">入口 / 初始化<span class="path">index-webview-vue.ts · webview-setup.ts · webview-api.ts</span></span>
+        </div>
+        <div class="desc"><code>Comlink.wrap(endpoint)</code> + <code>setBridge(api)</code> 初始化 Comlink 端并设置全局 bridge。</div>
+      </div>
+
+      <!-- 根组件 -->
+      <div class="module layer-component">
+        <div class="head">
+          <span class="name">根组件 main-webview.vue</span>
+        </div>
+        <div class="desc">
+          顶层 <code>provide(SharedRefsKey, { ...10 个 ref })</code> · 组合 7 个 composable ·
+          渲染 4 个核心 UI 组件。
+        </div>
+        <div class="deps">
+          <span class="dep arrow">provide SharedRefs</span>
+          <span class="dep arrow">useFeishuReport</span>
+          <span class="dep arrow">useInflight</span>
+          <span class="dep arrow">useSubmit</span>
+          <span class="dep arrow">useImport</span>
+          <span class="dep arrow">useRecordEdit</span>
+          <span class="dep arrow">useGenerationState</span>
+          <span class="dep arrow">useReferences</span>
+        </div>
+      </div>
+
+      <!-- SharedRefs 提供 -->
+      <div class="module layer-state">
+        <div class="head">
+          <span class="name">providers/state.ts</span>
+        </div>
+        <div class="desc">
+          定义 <code>SharedRefs</code> 接口 + <code>SharedRefsKey</code>;
+          10 个高频 ref (apiKey / projectInfo / records / prompt / model / ratio / duration / resolution / references / selectedRecordId)。
+        </div>
+      </div>
+
+      <!-- 共享 Composables (在 main-webview.vue 顶层组合) -->
+      <div class="module layer-composable">
+        <div class="head">
+          <span class="name">顶层共享 Composable</span>
+        </div>
+        <div class="desc">由 main-webview 持有,作为多个 composable 之间的共享状态</div>
+        <div class="sub-modules">
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useInflight</span></div>
+            <div class="desc">inflight 登记表 · polling_ 单例 · generating/pollingActive 派生 · onTerminalSuccess 回调</div>
+            <div class="deps"><span class="dep arrow">inject SharedRefs</span><span class="dep arrow">usePolling</span><span class="dep arrow">bridge</span></div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useFeishuReport</span></div>
+            <div class="desc">reportToFeishu · toRecordError (instanceof VideoGenError)</div>
+            <div class="deps"><span class="dep arrow">bridge</span><span class="dep arrow">core/errors</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 业务 Composables -->
+      <div class="module layer-composable">
+        <div class="head">
+          <span class="name">业务 Composables (共享 inflighApi)</span>
+        </div>
+        <div class="desc">从顶层 useInflight 拿共享状态</div>
+        <div class="sub-modules">
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useSubmit</span></div>
+            <div class="desc">submitGenerate / upgradeTo2K / optimizePrompt / resolveSubmitOwner · optimizingPrompt ref</div>
+            <div class="deps"><span class="dep arrow">inject SharedRefs</span><span class="dep arrow">useCaptureContext</span><span class="dep arrow">useProviderSafe</span><span class="dep arrow">MiniMaxProvider</span><span class="dep arrow">bridge</span></div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useImport</span></div>
+            <div class="desc">importToProject · 同步 records.workFile · toast</div>
+            <div class="deps"><span class="dep arrow">inject SharedRefs</span><span class="dep arrow">bridge</span></div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useRecordEdit</span></div>
+            <div class="desc">retryRecord (含 reference 过期重传) / deleteRecord</div>
+            <div class="deps"><span class="dep arrow">inject SharedRefs</span><span class="dep arrow">bridge</span></div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useGenerationState</span></div>
+            <div class="desc">constraints · generatedCount · loadRecords · persistRecords(防抖落盘)</div>
+            <div class="deps"><span class="dep arrow">inject SharedRefs</span><span class="dep arrow">bridge</span><span class="dep arrow">DEFAULT_PROVIDER_ID</span></div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useReferences</span></div>
+            <div class="desc">addReference / removeReference / captureFrameAndOpenInPs / useAsReference</div>
+            <div class="deps"><span class="dep arrow">useCaptureContext</span><span class="dep arrow">bridge</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 工具 Composables -->
+      <div class="module layer-composable">
+        <div class="head">
+          <span class="name">工具 / 单例 Composables</span>
+        </div>
+        <div class="sub-modules">
+          <div class="module layer-composable">
+            <div class="head"><span class="name">usePolling</span></div>
+            <div class="desc">Map&lt;taskId, PollerState&gt; · 多任务并行 · 5s 起始间隔 · 6 次失败熔断</div>
+            <div class="deps"><span class="dep arrow">MiniMaxProvider</span></div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useCaptureContext</span></div>
+            <div class="desc">抓素材时锁定工程归属 · session-only · 提交后释放</div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useRecordActions</span></div>
+            <div class="desc">panel UI 状态 (selectedId / 拖拽 / 升级判定)</div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useRecordPreview</span></div>
+            <div class="desc">video element ref / playing / elapsed 时间</div>
+          </div>
+          <div class="module layer-composable">
+            <div class="head"><span class="name">useProviderSafe</span></div>
+            <div class="desc">safeProviderCall: 把 throw 翻译为 {ok, error} · V4.1</div>
+            <div class="deps"><span class="dep arrow">useFeishuReport.toRecordError</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- services -->
+      <div class="module layer-service">
+        <div class="head">
+          <span class="name">services/bridge.ts</span>
+        </div>
+        <div class="desc">
+          显式封装 30 个 Comlink 代理方法为 <code>bridge.X(args)</code>;
+          由 Comlink 自动跨进程序列化结果。
+        </div>
+      </div>
+
+      <!-- Provider 抽象 (web 端) -->
+      <div class="module layer-provider">
+        <div class="head">
+          <span class="name">Provider 抽象<span class="path">providers/</span></span>
+        </div>
+        <div class="desc">与 UXP 端 provider 抽象对称,webview 端独立抽象层</div>
+        <div class="sub-modules">
+          <div class="module layer-provider">
+            <div class="head"><span class="name">core/VideoGenProvider</span></div>
+            <div class="desc">接口:createVideo / queryTask / regenerateVideo / submitOptimizePrompt / parseError / buildAuthHeaders</div>
+          </div>
+          <div class="module layer-provider">
+            <div class="head"><span class="name">core/types.ts</span></div>
+            <div class="desc">VideoGenCreateRequest / Response / Query / Error · ModelDescriptor · VideoGenCapability</div>
+          </div>
+          <div class="module layer-provider">
+            <div class="head"><span class="name">core/errors.ts</span></div>
+            <div class="desc">VideoGenError 类 (替代 MiniMax.ts 的 MiniMaxError)</div>
+          </div>
+          <div class="module layer-provider">
+            <div class="head"><span class="name">core/registry.ts</span></div>
+            <div class="desc">VideoGenProvider 注册中心 (同步 + dynamic loader)</div>
+          </div>
+          <div class="module layer-provider">
+            <div class="head"><span class="name">minimax/MiniMaxProvider</span></div>
+            <div class="desc">真实实现:createVideo → api.minimax.cn/v2/video_generation · queryTask / regenerateVideo / submitOptimizePrompt · throw VideoGenError</div>
+            <div class="deps"><span class="dep arrow">wireFormat</span><span class="dep arrow">errorMap</span></div>
+          </div>
+          <div class="module layer-provider">
+            <div class="head"><span class="name">minimax/wireFormat</span></div>
+            <div class="desc">buildContent: prompt + references → wire-format JSON</div>
+          </div>
+          <div class="module layer-provider">
+            <div class="head"><span class="name">minimax/errorMap</span></div>
+            <div class="desc">parseMiniMaxError / friendlyMiniMaxError</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- UI 组件 -->
+      <div class="module layer-component">
+        <div class="head">
+          <span class="name">UI 组件 (components/)</span>
+        </div>
+        <div class="sub-modules">
+          <div class="module layer-component">
+            <div class="head"><span class="name">RecordsPanel.vue</span></div>
+            <div class="desc">记录列表 · 状态卡片 · 缩略图</div>
+            <div class="deps"><span class="dep arrow">useRecordActions</span><span class="dep arrow">useRecordPreview</span></div>
+          </div>
+          <div class="module layer-component">
+            <div class="head"><span class="name">ReferenceList.vue</span></div>
+            <div class="desc">v-model:references · 添加/抓帧/抓视频/移除/PS 中</div>
+          </div>
+          <div class="module layer-component">
+            <div class="head"><span class="name">PromptInput.vue</span></div>
+            <div class="desc">v-model:prompt/model/ratio/duration/resolution · 生成按钮 · 优化</div>
+          </div>
+          <div class="module layer-component">
+            <div class="head"><span class="name">SettingsPanel.vue</span></div>
+            <div class="desc">API Key 保存 · 飞书配置 · DEV 模式调试钩子</div>
+            <div class="deps"><span class="dep arrow">bridge</span></div>
+          </div>
+          <div class="module layer-component">
+            <div class="head"><span class="name">PreviewGrid.vue</span></div>
+            <div class="desc">缩略图网格 (备用)</div>
+          </div>
+          <div class="module layer-component">
+            <div class="head"><span class="name">RecordList.vue · StatusPanel.vue</span></div>
+            <div class="desc">备用 UI 组件</div>
+          </div>
+        </div>
+      </div>
+
+    </article>
+
+  </div>
+
+  <!-- 关键数据流 -->
+  <div class="section-title">
+    <span class="pill-icon bridge">⚡</span>
+    关键数据流示例:提交一次生成
+  </div>
+  <div class="flow">
+
+    <div class="flow-step">
+      <span class="num">1</span>
+      <div class="body">
+        <div class="from">WebView · PromptInput.vue</div>
+        <div class="what">用户点 <code>@submit</code> → 触发 <code>submitApi.submitGenerate()</code></div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <span class="num">2</span>
+      <div class="body">
+        <div class="from">WebView · useSubmit.ts</div>
+        <div class="what">resolveSubmitOwner (优先 <code>useCaptureContext</code>,否则 <code>bridge.queryProjectState</code>) → 写 pending record → <code>safeProviderCall(() =&gt; mini.createVideo(req, apiKey))</code></div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <span class="num">3</span>
+      <div class="body">
+        <div class="from">WebView · MiniMaxProvider (web)</div>
+        <div class="what">POST <code>https://api.minimax.cn/v2/video_generation</code> · <code>buildContent</code> 拼 wire-format · throw / return VideoGenCreateResponse</div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <span class="num">4</span>
+      <div class="body">
+        <div class="from">WebView · 回到 useSubmit</div>
+        <div class="what">拿到 taskId → record 状态 <code>pending → generating</code> → <code>inflightApi.resumePolling(rec)</code></div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <span class="num">5</span>
+      <div class="body">
+        <div class="from">WebView · usePolling</div>
+        <div class="what">Map&lt;taskId, PollerState&gt; 启动 5s 间隔轮询 → 每 tick 调 <code>mini.queryTask(taskId, apiKey)</code></div>
+      </div>
+    </div>
+
+    <div class="flow-step">
+      <span class="num">6</span>
+      <div class="body">
+        <div class="from">UXP · 后续飞书上报</div>
+        <div class="what">任务 succeeded → <code>bridge.downloadFile</code> → UXP 端 <code>downloadCore.downloadToWorkDir</code> → <code>core/ai/providers/minimax/MiniMaxUxPProvider.downloadToWorkDir</code> (fetch + 落盘) → onTerminalSuccess → <code>feishuApi.reportToFeishu(rec)</code> → <code>bridge.reportGenerated</code> → UXP <code>webhookCore.reportGenerated</code> → <code>core/billing.estimateCost</code> → POST 飞书 (含限流退避重试)</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 跨端 API 清单 -->
+  <div class="section-title">
+    <span class="pill-icon bridge">⇄</span>
+    桥接 API 速查 (节选 · 30 个完整方法见 <code>shared/messages.ts</code>)
+  </div>
+  <table class="api-table">
+    <thead>
+      <tr>
+        <th style="width: 30%;">桥接方法 (UxptoWebviewAPI)</th>
+        <th style="width: 35%;">桥接源</th>
+        <th>UXP 端实现</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td class="method">queryProjectState()</td><td class="target">webview → bridge</td><td>projectCore.queryProjectState</td></tr>
+      <tr><td class="method">recordsRead({guid, path})</td><td class="target">webview → bridge</td><td>recordsCore.read (按归属路由)</td></tr>
+      <tr><td class="method">recordsWrite(data)</td><td class="target">webview → bridge</td><td>recordsCore.write (按归属路由)</td></tr>
+      <tr><td class="method">pickAndUploadReference({kind})</td><td class="target">webview → bridge</td><td>filesCore.pickAndValidate + ai/upload</td></tr>
+      <tr><td class="method">reuploadReference(args)</td><td class="target">webview → bridge</td><td>filesCore + ai/upload</td></tr>
+      <tr><td class="method">uploadReferenceFile({filePath, fileName})</td><td class="target">webview → bridge</td><td>framesCore.uploadReferenceFile</td></tr>
+      <tr><td class="method">downloadFile({url, suggestedName, recordId})</td><td class="target">webview → bridge</td><td>ai/download + filesCore</td></tr>
+      <tr><td class="method">insertToTimeline(args)</td><td class="target">webview → bridge</td><td>timelineCore.importAndInsert (lockedAccess)</td></tr>
+      <tr><td class="method">importToProject({recordIds})</td><td class="target">webview → bridge</td><td>importCore.importToProject (V2.1 下沉)</td></tr>
+      <tr><td class="method">captureActiveFrame(args)</td><td class="target">webview → bridge</td><td>framesCore.captureActiveFrame</td></tr>
+      <tr><td class="method">captureFrameOnlyAsReference(args)</td><td class="target">webview → bridge</td><td>framesCore.captureOnlyAsReference</td></tr>
+      <tr><td class="method">captureAndUploadAsReference()</td><td class="target">webview → bridge</td><td>framesCore.captureAndUploadAsReference</td></tr>
+      <tr><td class="method">captureWorkAreaOnlyAsReference(args)</td><td class="target">webview → bridge</td><td>captureVideoCore</td></tr>
+      <tr><td class="method">openInPhotoshop(localPath)</td><td class="target">webview → bridge</td><td>filesCore.openWithPhotoshopNative</td></tr>
+      <tr><td class="method">reportGenerated(record, purpose)</td><td class="target">webview → bridge</td><td>webhookCore.reportGenerated (含限流重试)</td></tr>
+      <tr><td class="method">testFeishuReport()</td><td class="target">webview → bridge</td><td>webhookCore.testReport</td></tr>
+      <tr><td class="method">getApiKey() / setApiKey(key)</td><td class="target">webview → bridge</td><td>storage.getApiKey/setApiKey (secureStorage)</td></tr>
+      <tr><td class="method">getFeishuConfig() / setFeishuConfig(cfg)</td><td class="target">webview → bridge</td><td>storage.getFeishuConfig/setFeishuConfig</td></tr>
+      <tr><td class="method">toLocalFileUrl(path)</td><td class="target">webview → bridge</td><td>previewUrlCore.toLocalFileUrl (preview-cache)</td></tr>
+      <tr><td class="method">readAsDataUrl(file)</td><td class="target">webview → bridge</td><td>previewUrlCore.readAsDataUrl (base64)</td></tr>
+      <tr><td class="method">ensureWorkDir() / openWorkDir()</td><td class="target">webview → bridge</td><td>filesCore.ensureWorkDir / openWorkDir</td></tr>
+      <tr><td class="method">detectFileKind(path)</td><td class="target">webview → bridge</td><td>fileIOCore.detectFileKind</td></tr>
+      <tr><td class="method">getUXPInfo()</td><td class="target">webview → bridge</td><td>api/uxp.ts.getUXPInfo</td></tr>
+      <tr><td class="method">getColorScheme()</td><td class="target">webview → bridge</td><td>api/uxp.ts → themes.ts</td></tr>
+      <tr><td class="method">echo(message)</td><td class="target">webview → bridge</td><td>api.ts.echo (调试用)</td></tr>
+      <tr><td class="method">notify(message)</td><td class="target">webview → bridge</td><td>api/premierepro.ts (alert)</td></tr>
+      <tr><td class="method">getProjectInfo()</td><td class="target">webview → bridge</td><td>api/premierepro.ts</td></tr>
+      <tr><td class="method">onProjectChanged(callback)</td><td class="target">bridge → webview</td><td>webview-api.ts 注册回调</td></tr>
+      <tr><td class="method">updateColorScheme(scheme)</td><td class="target">bridge → webview</td><td>webview-api.ts 更新 CSS 变量</td></tr>
+    </tbody>
+  </table>
+
+  <!-- 图例 -->
+  <div class="legend">
+    <div class="item"><span class="swatch" style="background: var(--uxp-bg); border-color: var(--uxp-border);"></span>UXP 端基础设施 / 业务层</div>
+    <div class="item"><span class="swatch" style="background: #fed7aa; border-color: #fb923c;"></span>UXP 端文件 IO 层</div>
+    <div class="item"><span class="swatch" style="background: #fbcfe8; border-color: #f472b6;"></span>UXP 端业务层 (含 captureBase)</div>
+    <div class="item"><span class="swatch" style="background: #ddd6fe; border-color: #8b5cf6;"></span>UXP 端 AI Provider 抽象</div>
+    <div class="item"><span class="swatch" style="background: var(--web-bg); border-color: var(--web-border);"></span>WebView 端 Composable / Component</div>
+    <div class="item"><span class="swatch" style="background: #c7d2fe; border-color: #6366f1;"></span>WebView 端 State / Provider</div>
+    <div class="item"><span class="swatch" style="background: var(--bridge-bg); border-color: var(--bridge-border);"></span>桥接 / 数据流</div>
+    <div class="item"><span class="swatch" style="background: var(--shared-bg); border-color: var(--shared-border);"></span>共享类型 / 数据</div>
+  </div>
+
+  <footer class="bottom">
+    RocX · Adobe Premiere Pro UXP 插件 · 组件结构关系图
+    <br/>由 R1+R2+R3 + v2 (V1-V5) 13 个 commit 重构后生成 · 2026-10-01
+  </footer>
+
+</div>
+
+<script>
+  // 折叠 / 展开嵌套模块
+  document.querySelectorAll('.module > .name').forEach((el) => {
+    const sub = el.parentElement.querySelector(':scope > .sub-modules');
+    if (!sub) return;
+    el.style.cursor = 'pointer';
+    el.title = '点击展开 / 折叠子模块';
+    el.addEventListener('click', () => {
+      const open = sub.style.display !== 'none';
+      sub.style.display = open ? 'none' : 'block';
+      el.style.opacity = open ? '0.7' : '1';
+    });
+  });
+</script>
+
+</body>
+</html>
