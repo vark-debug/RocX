@@ -13,7 +13,7 @@ import { premierepro, uxp } from "../globals";
 import { filesCore, getFs } from "./files";
 import { uploadCore } from "./ai/upload";
 import { storage } from "./storage";
-import type { ReferenceItem } from "@shared/messages";
+import type { ReferenceItem, CaptureOwner } from "@shared/messages";
 
 function safeStr(v: any): string {
   if (v == null) return "";
@@ -23,6 +23,20 @@ function safeStr(v: any): string {
   } catch {
     return String(v);
   }
+}
+
+/**
+ * 从抓取时拿到的活动工程对象读出归属快照。
+ * 必须在抓取那一刻调用 —— 事后由 webview 端再查一次活动工程就是一次独立推断，
+ * 会重新引入「读 A 写 B」的错位。
+ */
+function ownerOf(project: any): CaptureOwner | null {
+  if (!project?.path) return null;
+  return {
+    projectGuid: String(project.guid ?? ""),
+    projectPath: project.path,
+    projectName: project.name ?? undefined,
+  };
 }
 
 async function arrayBufferToBase64(ab: ArrayBuffer): Promise<string> {
@@ -62,12 +76,14 @@ export const framesCore = {
   } = {}): Promise<{
     ok: boolean;
     reference?: ReferenceItem;
+    owner?: CaptureOwner | null;
     error?: string;
   }> {
     console.log("[frames] captureOnlyAsReference start", opts);
     try {
       const project = await premierepro.Project.getActiveProject();
       if (!project) return { ok: false, error: "无活动项目" };
+      const owner = ownerOf(project);
       const sequence = await project.getActiveSequence();
       if (!sequence) return { ok: false, error: "无活动序列，请先激活一个序列" };
 
@@ -204,7 +220,7 @@ export const framesCore = {
         thumbDataUrl: dataUrl,
         // fileId / uploadedAt 暂不设置，等待后台 upload
       };
-      return { ok: true, reference: ref };
+      return { ok: true, reference: ref, owner };
     } catch (e: any) {
       console.error("[frames] captureOnly EXCEPTION:", e);
       return { ok: false, error: safeStr((e as any)?.message || e) };
@@ -283,12 +299,14 @@ export const framesCore = {
   } = {}): Promise<{
     ok: boolean;
     reference?: ReferenceItem & { thumbDataUrl?: string };
+    owner?: CaptureOwner | null;
     error?: string;
   }> {
     console.log("[frames] captureAndUploadAsReference start", opts);
     try {
       const project = await premierepro.Project.getActiveProject();
       if (!project) return { ok: false, error: "无活动项目" };
+      const owner = ownerOf(project);
       const sequence = await project.getActiveSequence();
       if (!sequence) return { ok: false, error: "无活动序列，请先激活一个序列" };
 
@@ -420,7 +438,7 @@ export const framesCore = {
         sizeBytes: actualFile.size || 0,
         thumbDataUrl: dataUrl,
       };
-      return { ok: true, reference: ref };
+      return { ok: true, reference: ref, owner };
     } catch (e: any) {
       console.error("[frames] EXCEPTION:", e);
       return { ok: false, error: String(e?.message || e) };

@@ -65,6 +65,20 @@ export interface ReferenceItem {
   pendingUpload?: boolean;
 }
 
+/**
+ * 抓素材那一刻的工程归属快照。
+ *
+ * 归属不再事后推断（曾用「素材父级目录 → 实时活动工程 → 缓存」三层信任层级，
+ * 读一次写一次各猜一次，多工程下必然错位），而是在抓取瞬间由 UXP 端
+ * 从真实的工程对象直接读出并随抓取结果返回。
+ */
+export interface CaptureOwner {
+  projectGuid: string;
+  /** 工程文件的绝对路径（不是目录），落盘按它定位 records JSON */
+  projectPath: string;
+  projectName?: string;
+}
+
 export interface GenerationRecord {
   id: string;
   createdAt: string;
@@ -110,6 +124,15 @@ export interface GenerationRecord {
    */
   parentTaskId?: string;
   upgradedFromResolution?: MiniMaxResolution;
+  /**
+   * 归属工程标识：PR 同一进程可打开多个工程，此字段标识本记录属于哪个工程。
+   * - 用于「是否属于当前活动工程」的判定与 UI 归属提示
+   * - 与 projectPath 共同构成归属信息：guid 用于判定，path 用于落盘路由
+   * - 历史记录缺失时，读取时用外层 ProjectRecords 的同名字段补齐
+   */
+  projectGuid?: string;
+  /** 归属工程的绝对路径：落盘路由依据（写入时不再用「调用瞬间的活动工程路径」） */
+  projectPath?: string;
 }
 
 export interface ProjectRecords {
@@ -243,7 +266,14 @@ export interface UxptoWebviewAPI {
   }>;
 
   /** 读取当前 PR 项目对应的记录 JSON（不存在返回空 records） */
-  recordsRead(): Promise<{
+  /**
+   * 读取指定工程的记录；不传 target 时读实时活动工程。
+   * 多工程场景下由调用方（webview 的 projectInfo）指定，保证与写入指向同一工程。
+   */
+  recordsRead(target?: {
+    projectGuid?: string;
+    projectPath?: string;
+  }): Promise<{
     ok: boolean;
     data: ProjectRecords | null;
     error?: string;
@@ -422,6 +452,8 @@ export interface UxptoWebviewAPI {
   }): Promise<{
     ok: boolean;
     reference?: ReferenceItem & { thumbDataUrl?: string };
+    /** 抓取瞬间的工程归属；无活动工程时为 null */
+    owner?: CaptureOwner | null;
     error?: string;
   }>;
 
@@ -434,6 +466,8 @@ export interface UxptoWebviewAPI {
   }): Promise<{
     ok: boolean;
     reference?: ReferenceItem;
+    /** 抓取瞬间的工程归属；无活动工程时为 null */
+    owner?: CaptureOwner | null;
     error?: string;
   }>;
 
@@ -492,6 +526,8 @@ export interface UxptoWebviewAPI {
     /** 导出视频的像素宽高（用于前端自动按比例填写） */
     width?: number;
     height?: number;
+    /** 抓取瞬间的工程归属；无活动工程时为 null */
+    owner?: CaptureOwner | null;
     error?: string;
   }>;
 }

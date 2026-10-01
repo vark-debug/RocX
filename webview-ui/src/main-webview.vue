@@ -116,6 +116,7 @@ const state = useGenerationState({
   references,
   settingsOpen,
   resumePolling: tasks.resumePolling,
+  getInflightRecords: tasks.getInflightRecords,
 });
 
 // ---------- 参考素材（依赖 state.constraints 做智能填写） ----------
@@ -134,7 +135,6 @@ const refsApi = useReferences({
 const canSubmit = computed(() => {
   if (!apiKey.value) return false;
   if (!prompt.value.trim()) return false;
-  if (tasks.generating.value && tasks.pollingActive.value) return false;
   if (references.value.length === 0 && ratio.value === "adaptive") return false;
   return true;
 });
@@ -152,7 +152,7 @@ onMounted(async () => {
   const pi = await bridge.queryProjectState();
   if (pi.project) {
     projectInfo.value = pi.project;
-    await state.loadRecords();
+    await state.reloadRecords();
   }
 });
 
@@ -169,7 +169,7 @@ async function refreshProject() {
     const pi = await bridge.queryProjectState();
     if (pi.project) {
       projectInfo.value = pi.project;
-      await state.loadRecords();
+      await state.reloadRecords();
     } else {
       projectInfo.value = null;
       records.value = [];
@@ -217,6 +217,7 @@ async function refreshProject() {
     <RecordsPanel
       :records="records"
       :generating="tasks.generating.value"
+      :current-project="projectInfo"
       @select="(rec: GenerationRecord) => (selectedRecordId = rec.id)"
       @import-to-project="tasks.importToProject"
       @retry="tasks.retryRecord"

@@ -48,8 +48,8 @@ export const api = {
   },
 
   // 记录读写
-  async recordsRead() {
-    return await recordsCore.read();
+  async recordsRead(target?: { projectGuid?: string; projectPath?: string }) {
+    return await recordsCore.read(target);
   },
   async recordsWrite(data: any) {
     return await recordsCore.write(data);

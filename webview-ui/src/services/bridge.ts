@@ -19,7 +19,8 @@ export const bridge = {
   echo: (msg: string) => ensure().echo(msg),
   queryProjectState: () => ensure().queryProjectState(),
   getColorScheme: () => ensure().getColorScheme(),
-  recordsRead: () => ensure().recordsRead(),
+  recordsRead: (target?: { projectGuid?: string; projectPath?: string }) =>
+    ensure().recordsRead(target),
   recordsWrite: (data: ProjectRecords) => ensure().recordsWrite(data),
   pickAndUploadReference: (kind: FileKind) =>
     ensure().pickAndUploadReference({ kind }),

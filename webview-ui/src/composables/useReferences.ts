@@ -19,6 +19,7 @@ import {
   type MiniMaxParamConstraints,
 } from "@shared/messages";
 import type { ModelDescriptor } from "../providers/core/types";
+import { lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 
 export function useReferences(opts: {
   references: Ref<ReferenceItem[]>;
@@ -57,6 +58,8 @@ export function useReferences(opts: {
 
   function removeReference(idx: number) {
     opts.references.value.splice(idx, 1);
+    // 素材列表变空 = 一批素材的边界结束，释放归属锁定
+    if (opts.references.value.length === 0) resetCaptureContext();
   }
 
   // ---------- 工具：把已生成的视频上传为参考 ----------
@@ -175,6 +178,8 @@ export function useReferences(opts: {
       opts.showToast(`抓帧失败: ${r.error}`);
       return;
     }
+    // 锁定归属：抓取瞬间的工程身份，first-write-wins
+    lockCaptureContext(r.owner);
     opts.references.value.push(r.reference);
     uploadInBackground();
   }
@@ -216,6 +221,8 @@ export function useReferences(opts: {
     }
     // 关键：标记 pendingUpload=**true**、不调 uploadInBackground
     r.reference.pendingUpload = true;
+    // 锁定归属：第一阶段抓帧成功即确定，与普通抓帧一致
+    lockCaptureContext(r.owner);
     opts.references.value.push(r.reference);
     // 阶段 3：调系统关联启动 PS（fire-and-forget；失败仅 console.warn，不污染 toast）
     bridge.openInPhotoshop(r.reference.localPath).then((rs) => {
@@ -284,6 +291,8 @@ export function useReferences(opts: {
       opts.showToast(`抓视频失败: ${r.error}`);
       return;
     }
+    // 锁定归属：抓取瞬间的工程身份，first-write-wins
+    lockCaptureContext(r.owner);
     // 仅当当前没有任何视频参考（即本次是第一个视频参考）时，才智能填写生成时长
     const isFirstVideoRef = opts.references.value.every(
       (x) => x.type !== "reference_video",

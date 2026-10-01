@@ -267,30 +267,28 @@ export const filesCore = {
     console.log(`[files][ps-launch] 开始拉起 PS, localPath=${localPath}`);
 
     // 1) C++ Hybrid Plugin
-    // 【实机测试中】暂时注释掉 hybrid 调用：Hybrid Plugin 会抬高 PR 版本门槛，
-    // 本机 PR 版本不满足，无法验证 launcher 脚本路径。验证完请恢复本段。
-    // try {
-    //   // UXP Hybrid Plugin:`require("name.uxpaddon")` 返回 Promise，必须 await
-    //   const addon: any = await (require as any)("RocXBridge.uxpaddon");
-    //   if (addon && typeof addon.openFileInPhotoshop === "function") {
-    //     const r = await addon.openFileInPhotoshop(localPath);
-    //     if (r && r.ok) {
-    //       return { ok: true, source: "native" };
-    //     }
-    //     if (r && r.error) {
-    //       console.warn("[files] hybrid addon returned error, fallback to launcher:", r.error);
-    //     }
-    //   } else {
-    //     console.warn("[files] hybrid addon loaded but openFileInPhotoshop missing");
-    //   }
-    // } catch (e: any) {
-    //   // MODULE_NOT_FOUND / Addon is not supported / PR 版本过低 / uxpaddon 缺失
-    //   console.warn(
-    //     "[files] hybrid addon unavailable, fallback to launcher script:",
-    //     e?.message || e,
-    //   );
-    // }
-    console.log("[files][ps-launch] 跳过 C++ Hybrid 路径（实机测试临时禁用）");
+    try {
+      // UXP Hybrid Plugin:`require("name.uxpaddon")` 返回 Promise，必须 await
+      const addon: any = await (require as any)("RocXBridge.uxpaddon");
+      if (addon && typeof addon.openFileInPhotoshop === "function") {
+        const r = await addon.openFileInPhotoshop(localPath);
+        if (r && r.ok) {
+          console.log("[files][ps-launch] ✅ 命中路径: C++ Hybrid addon");
+          return { ok: true, source: "native" };
+        }
+        if (r && r.error) {
+          console.warn("[files] hybrid addon returned error, fallback to launcher:", r.error);
+        }
+      } else {
+        console.warn("[files] hybrid addon loaded but openFileInPhotoshop missing");
+      }
+    } catch (e: any) {
+      // MODULE_NOT_FOUND / Addon is not supported / PR 版本过低 / uxpaddon 缺失
+      console.warn(
+        "[files][ps-launch] C++ Hybrid 不可用, 降级 launcher 脚本:",
+        e?.message || e,
+      );
+    }
 
     // 2) Launcher 脚本
     const l = await this.openWithPhotoshopLauncher(localPath);

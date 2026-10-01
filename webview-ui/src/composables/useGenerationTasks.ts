@@ -1,7 +1,7 @@
 /**
  * 任务生命周期 composable：从 main-webview.vue 抽出
- * - 当前轮询状态：generating / pollingActive
- * - 轮询恢复：resumePolling（启动 usePolling）、resumeNextGenerating（多任务排队）
+ * - 在飞任务登记表 inflight：与 records 数组解耦，切工程替换 records 时不丢在飞任务
+ * - 当前轮询状态：generating / pollingActive（均由 inflight 派生，支持多工程并行）
  * - 提交：submitGenerate（含 __ROCX_DRY_RUN__ 分支；成功启动轮询）
  * - 升级：upgradeTo2K（按 provider + model.capability 决定）
  * - 重试：retryRecord（把 prompt / params / references 填回 UI；必要时重新上传 reference）
@@ -10,10 +10,11 @@
  *
  * 行为与原 main-webview.vue 完全一致。
  */
-import { ref, type Ref } from "vue";
+import { computed, ref, shallowReactive } from "vue";
 import { bridge } from "../services/bridge";
 import { MiniMaxAPI, MiniMaxError } from "../services/MiniMax";
 import { usePolling } from "./usePolling";
+import { getCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import {
   REPORT_PURPOSE,
   type GenerationRecord,
@@ -48,11 +49,55 @@ export function useGenerationTasks(opts: {
   /** toast */
   showToast: (msg: string | unknown) => void;
 }) {
-  const generating = ref<GenerationRecord | null>(null);
-  const pollingActive = ref(false);
   const optimizingPrompt = ref(false);
 
+  /**
+   * 在飞任务登记表：recordId -> 归属信息。与 records 数组解耦，
+   * 切工程导致 records 被替换时不影响这里的任务追踪。
+   * shallowReactive：set/delete 会触发下面的 computed 重算（普通 Map 变更不被追踪）。
+   */
+  const inflight = shallowReactive(
+    new Map<string, { record: GenerationRecord; polling: boolean }>(),
+  );
+
   const polling_ = usePolling();
+
+  /** 记录是否属于指定工程：优先用 guid 判定，缺 guid 时退回 path */
+  function belongsTo(
+    rec: GenerationRecord,
+    info: { path: string; guid: string } | null,
+  ): boolean {
+    if (!info) return false;
+    if (info.guid) return rec.projectGuid === info.guid;
+    return rec.projectPath === info.path;
+  }
+
+  /** 在飞任务里是否已有该记录且仍在轮询（用于防重复 start 同一 taskId） */
+  function isPolling(recordId: string): boolean {
+    return inflight.get(recordId)?.polling === true;
+  }
+
+  /** 对外查询：当前所有在飞任务的记录副本（权威状态） */
+  function getInflightRecords(): GenerationRecord[] {
+    return Array.from(inflight.values()).map((e) => e.record);
+  }
+
+  /**
+   * 派生：当前活动工程里正在 generating 的那条在飞记录（状态面板用）。
+   * 优先当前工程的，其次任意一条在飞记录。
+   */
+  const generating = computed<GenerationRecord | null>(() => {
+    const list = getInflightRecords();
+    const cur = opts.projectInfo.value;
+    return (
+      list.find((r) => r.status === "generating" && belongsTo(r, cur)) ??
+      list.find((r) => r.status === "generating") ??
+      null
+    );
+  });
+
+  /** 派生：还有任意任务在轮询（= 在飞登记表非空） */
+  const pollingActive = computed(() => inflight.size > 0);
 
   // ---------- 错误归一化 ----------
   function toRecordError(e: any) {
@@ -86,116 +131,176 @@ export function useGenerationTasks(opts: {
   }
 
   // ---------- 轮询 ----------
+  /**
+   * 把权威 record 副本同步进 records 数组。
+   * 切工程时 records 数组会被整体替换，旧工程记录可能已不在其中 —— 此时静默跳过，
+   * 权威状态仍保留在 inflight 里，不会丢。
+   */
+  function syncToRecords(next: GenerationRecord) {
+    const idx = opts.records.value.findIndex((r) => r.id === next.id);
+    if (idx < 0) return;
+    const cur = opts.records.value[idx];
+    // 同一 id 但归属工程不一致：防御性判断，避免误改别的工程的记录
+    if (
+      (cur.projectGuid ?? "") !== (next.projectGuid ?? "") ||
+      (cur.projectPath ?? "") !== (next.projectPath ?? "")
+    ) {
+      return;
+    }
+    opts.records.value[idx] = { ...cur, ...next };
+  }
+
+  /** 更新在飞登记表里的权威 record 副本（先），再尽力同步到 records 数组（后） */
+  function commitInflight(recId: string, patch: Partial<GenerationRecord>) {
+    const entry = inflight.get(recId);
+    if (!entry) return null;
+    const next = { ...entry.record, ...patch };
+    inflight.set(recId, { ...entry, record: next });
+    syncToRecords(next);
+    return next;
+  }
+
   function resumePolling(rec: GenerationRecord) {
     if (!rec.taskId || !opts.apiKey.value) return;
-    if (generating.value && generating.value.id !== rec.id) return;
-    generating.value = rec;
-    pollingActive.value = true;
+    // 防重复启动：同一 taskId 已在轮询就不再 start
+    // （loadRecords 的故障恢复与 onTerminal 的 resumeNextGenerating 都会调进来）
+    if (isPolling(rec.id)) return;
+    // 登记进在飞任务表（已存在则更新为最新 record 副本）
+    const prev = inflight.get(rec.id);
+    inflight.set(rec.id, {
+      record: prev ? { ...prev.record, ...rec } : rec,
+      polling: true,
+    });
     polling_
       .start({
         taskId: rec.taskId,
         apiKey: opts.apiKey.value,
         onUpdate: (resp) => {
-          const idx = opts.records.value.findIndex((r) => r.id === rec.id);
-          if (idx < 0) return;
-          opts.records.value[idx] = {
-            ...opts.records.value[idx],
+          commitInflight(rec.id, {
             lastPolledAt: new Date().toISOString(),
             usage: resp.usage,
-          };
+          });
         },
         onTerminal: async (resp, err) => {
-          pollingActive.value = false;
-          const idx = opts.records.value.findIndex((r) => r.id === rec.id);
-          if (idx < 0) {
-            generating.value = null;
-            resumeNextGenerating();
-            return;
-          }
-          if (!resp) {
-            opts.records.value[idx] = {
-              ...opts.records.value[idx],
-              status: "failed",
-              error: { message: err?.message || "查询失败" },
-            };
-            generating.value = null;
-            resumeNextGenerating();
-            return;
-          }
-          if (resp.status === "succeeded" && resp.content?.url) {
-            // 先经 Comlink 桥调 UXP 端下载到 plugin-data 工作目录，成功后才更新 UI 状态
-            const fileName = `${rec.id}.mp4`;
-            const dl = await bridge.downloadFile({
-              url: resp.content.url,
-              suggestedName: fileName,
-              recordId: rec.id,
-            });
-            // await 期间用户可能切换项目导致 records 数组被替换，重新按 id 定位
-            const cur = opts.records.value.findIndex((r) => r.id === rec.id);
-            if (cur < 0) {
-              generating.value = null;
-              resumeNextGenerating();
+          // 终态只需执行一次：无论走哪个分支（含异常路径）都必须从在飞表摘除，
+          // 否则该 record 会永远留在 inflight 里，pollingActive 永远为 true
+          try {
+            if (!resp) {
+              commitInflight(rec.id, {
+                status: "failed",
+                error: { message: err?.message || "查询失败" },
+              });
               return;
             }
-            if (dl.ok && dl.localPath) {
-              opts.records.value[cur] = {
-                ...opts.records.value[cur],
-                status: "generated",
-                workFile: dl.localPath,
-                usage: resp.usage,
-              };
-              // 上报飞书多维表格：fire-and-forget，不阻塞后续轮询恢复
-              reportToFeishu(opts.records.value[cur]);
-            } else {
-              opts.records.value[cur] = {
-                ...opts.records.value[cur],
+            if (resp.status === "succeeded" && resp.content?.url) {
+              // 先经 Comlink 桥调 UXP 端下载到 plugin-data 工作目录，成功后才更新 UI 状态
+              const fileName = `${rec.id}.mp4`;
+              const dl = await bridge.downloadFile({
+                url: resp.content.url,
+                suggestedName: fileName,
+                recordId: rec.id,
+              });
+              if (dl.ok && dl.localPath) {
+                const done = commitInflight(rec.id, {
+                  status: "generated",
+                  workFile: dl.localPath,
+                  usage: resp.usage,
+                });
+                // 上报飞书多维表格：fire-and-forget，不阻塞后续轮询恢复
+                if (done) reportToFeishu(done);
+              } else {
+                commitInflight(rec.id, {
+                  status: "failed",
+                  error: { message: `下载失败: ${dl.error}` },
+                });
+              }
+            } else if (resp.status === "succeeded") {
+              // 极端情况：任务成功但响应缺 url —— 明确标记失败，避免永远卡在 generating
+              console.error(
+                "[webview] succeeded 但缺少 content.url:",
+                JSON.stringify(resp).slice(0, 300),
+              );
+              commitInflight(rec.id, {
                 status: "failed",
-                error: { message: `下载失败: ${dl.error}` },
-              };
+                error: {
+                  message: "任务成功但响应缺少下载地址（content.url 为空）",
+                  requestId: resp.request_id,
+                },
+              });
+            } else if (resp.status === "failed" || resp.status === "cancelled") {
+              commitInflight(rec.id, {
+                status: "failed",
+                error: {
+                  message: resp.error?.message || "生成失败",
+                  requestId: resp.request_id,
+                },
+              });
             }
-          } else if (resp.status === "succeeded") {
-            // 极端情况：任务成功但响应缺 url —— 明确标记失败，避免永远卡在 generating
-            console.error(
-              "[webview] succeeded 但缺少 content.url:",
-              JSON.stringify(resp).slice(0, 300),
-            );
-            opts.records.value[idx] = {
-              ...opts.records.value[idx],
-              status: "failed",
-              error: {
-                message: "任务成功但响应缺少下载地址（content.url 为空）",
-                requestId: resp.request_id,
-              },
-            };
-          } else if (resp.status === "failed" || resp.status === "cancelled") {
-            opts.records.value[idx] = {
-              ...opts.records.value[idx],
-              status: "failed",
-              error: {
-                message: resp.error?.message || "生成失败",
-                requestId: resp.request_id,
-              },
-            };
+          } finally {
+            inflight.delete(rec.id);
+            // 本任务结束：把其余还处于 generating 的记录（可能属于别的工程）恢复轮询
+            resumeNextGenerating();
           }
-          generating.value = null;
-          // 单轮询器设计：当前任务结束后自动恢复下一条 generating 记录
-          resumeNextGenerating();
         },
       });
   }
 
-  /** 当前轮询结束后，自动恢复下一条还处于 generating 的记录（多任务恢复/排队） */
+  /**
+   * 对所有还处于 generating 且有 taskId 的任务各自恢复轮询（多任务并行，无排队）。
+   *
+   * 数据源必须是 inflight 表而不是 records 数组：切工程时 records 会被整体替换成
+   * 新工程的记录，其它工程的在飞任务可能已不在其中，遍历 records 会漏掉它们，
+   * 导致任务永久卡在 generating。inflight 里存的是权威副本，与 records 是否
+   * 还持有该记录无关。
+   */
   function resumeNextGenerating() {
-    const next = opts.records.value.find(
-      (r) => r.status === "generating" && !!r.taskId,
-    );
-    if (next) resumePolling(next);
+    for (const rec of getInflightRecords()) {
+      if (rec.status === "generating" && rec.taskId) resumePolling(rec);
+    }
+  }
+
+  // ---------- 工程归属：消费抓素材时锁定的 CaptureContext ----------
+  /**
+   * 取本次提交应归属的工程。
+   *
+   * 归属是「赋值」而非「推断」：只要抓过素材，锁定值就在 CaptureContext 里，
+   * 一直保持到用户点生成 —— 期间切到哪个工程都不改变它。
+   * 纯文生视频（从未抓素材，context 为空）才回落到实时活动工程。
+   */
+  async function resolveSubmitOwner(): Promise<{
+    path: string;
+    guid: string;
+    name: string;
+  } | null> {
+    const locked = getCaptureContext();
+    if (locked) {
+      console.log(
+        `[gen] 归属来自抓素材锁定: path=${locked.projectPath} guid=${locked.projectGuid || "-"}`,
+      );
+      return {
+        path: locked.projectPath,
+        guid: locked.projectGuid,
+        name: locked.projectName,
+      };
+    }
+    // 纯文生视频：没有锁定值，用点击瞬间的实时活动工程
+    const live = await bridge.queryProjectState();
+    if (live.project?.path) {
+      console.log(`[gen] 无锁定归属（纯文生视频），用实时活动工程: ${live.project.path}`);
+      return {
+        path: live.project.path,
+        guid: String(live.project.guid ?? ""),
+        name: live.project.name ?? "",
+      };
+    }
+    return null;
   }
 
   // ---------- 提交生成 ----------
   async function submitGenerate() {
     if (!opts.apiKey.value) return;
-    if (!opts.projectInfo.value) {
+    const owner = await resolveSubmitOwner();
+    if (!owner || !owner.path) {
       opts.showToast("无活动 PR 项目，无法记录生成历史");
       return;
     }
@@ -238,13 +343,23 @@ export function useGenerationTasks(opts: {
       references: [...refsForSubmit],
       status: "pending",
       submittedAt: now,
+      // 归属标记：抓素材时锁定（纯文生视频为点击瞬间的实时活动工程），
+      // 任务完成后按此落盘，不受后续切换影响
+      projectGuid: owner.guid,
+      projectPath: owner.path,
     };
     opts.records.value.unshift(newRec);
+    console.log(
+      `[gen][submit] 提交生成: record.guid=${newRec.projectGuid || "-"} record.path=${newRec.projectPath || "-"} 归属来源=${getCaptureContext() ? "抓素材锁定" : "实时活动工程"}`,
+    );
     opts.prompt.value = "";
     // 一次提交 = 一次完整的输入清空:参考素材 UI 同步置空,
     // 避免下一轮生成误带上本次的参考图/参考视频。
     // 磁盘上的原始文件不受影响(本地路径由 UXP 端管理)。
     opts.references.value = [];
+    // 素材列表变空 = 一批素材的边界结束，释放归属锁定。
+    // 下一批抓素材会重新锁定（不跨批次继承）。
+    resetCaptureContext();
     // 提交成功后 ratio=adaptive 在无 references 时不合法,自动回退到 16:9,
     // 让用户在继续输入 prompt 后「生成」按钮可立即可点。
     if (opts.ratio.value === "adaptive") {
@@ -370,6 +485,11 @@ export function useGenerationTasks(opts: {
       submittedAt: now,
       parentTaskId: rec.taskId,
       upgradedFromResolution: "768P",
+      // 归属标记：跟随被升级的原记录。
+      // 原记录可能属于其它工程（在飞任务切工程后仍会完成），
+      // 此时不应把升级任务记到当前活动工程下。
+      projectGuid: rec.projectGuid ?? opts.projectInfo.value?.guid,
+      projectPath: rec.projectPath ?? opts.projectInfo.value?.path,
     };
     opts.records.value.unshift(upgradeRec);
 
@@ -472,7 +592,7 @@ export function useGenerationTasks(opts: {
    * - 限制：仅 H3 模型；prompt 非空；references 中若仍有未上传的 fileId 会被忽略
    * - 行为：成功时直接覆盖填入 prompt 输入框（不创建 record，不计费入库）
    * - ratio：与 createVideo 一致，无 references 时 'adaptive' 不合法，自动回退到 '16:9'
-   * - 复用现有 usePolling，与视频生成的轮询代码路径同源（共享 polling_ 单例）
+   * - 复用现有 usePolling，与视频生成的轮询代码路径同源（共享 polling_ 实例与在飞登记表）
    */
   async function optimizePrompt() {
     if (!opts.apiKey.value) {
@@ -497,7 +617,7 @@ export function useGenerationTasks(opts: {
       return;
     }
     if (optimizingPrompt.value) return;
-    // 与视频生成共用 polling_ 单例：若已有视频生成在轮询，拒绝并发提交
+    // 优化任务与视频生成共用在飞登记表：已有任务在飞时拒绝并发提交
     if (pollingActive.value) {
       opts.showToast("有视频生成正在轮询，请稍候再试");
       return;
@@ -530,6 +650,9 @@ export function useGenerationTasks(opts: {
       references: [...validRefs],
       status: "pending",
       submittedAt: now,
+      // 归属标记：占位 record 同样带上，落盘按归属路由
+      projectGuid: opts.projectInfo.value?.guid,
+      projectPath: opts.projectInfo.value?.path,
     };
 
     try {
@@ -541,62 +664,59 @@ export function useGenerationTasks(opts: {
         references: validRefs,
       });
       // 占位 record 写入 records，便于统一走 polling 流；status 始终为 'generating'
-      opts.records.value.unshift({
+      const optimizeRunRec: GenerationRecord = {
         ...optimizeRec,
         taskId: task_id,
         status: "generating",
-      });
-      // 设置 generating 标志 + 启动轮询（不下载产物，只取 prompt）
-      generating.value =
-        opts.records.value.find((r) => r.id === id) || null;
-      pollingActive.value = true;
+      };
+      opts.records.value.unshift(optimizeRunRec);
+      // 登记进在飞任务表（generating / pollingActive 由它派生）
+      inflight.set(id, { record: optimizeRunRec, polling: true });
       polling_.start({
         taskId: task_id,
         apiKey: opts.apiKey.value,
         intervalMs: 3000, // IR 任务通常很快（秒级），3s 轮询体验更好
         onUpdate: (resp) => {
-          const idx = opts.records.value.findIndex((r) => r.id === id);
-          if (idx < 0) return;
-          opts.records.value[idx] = {
-            ...opts.records.value[idx],
-            lastPolledAt: new Date().toISOString(),
-          };
+          commitInflight(id, { lastPolledAt: new Date().toISOString() });
         },
         onTerminal: (resp, err) => {
-          pollingActive.value = false;
-          const idx = opts.records.value.findIndex((r) => r.id === id);
-          if (idx >= 0) {
-            // 删除占位 record（用户不需要在历史里看到一条"优化任务"）
-            opts.records.value.splice(idx, 1);
-          }
-          generating.value = null;
-          if (err) {
-            console.error("[webview] optimizePrompt poll error:", err);
-            opts.showToast(`优化失败: ${err.message || err}`);
-            return;
-          }
-          if (!resp) {
-            opts.showToast("优化失败：查询无响应");
-            return;
-          }
-          if (resp.status === "succeeded") {
-            // 优化任务同样消耗额度，无论是否取到 content.prompt 都要上报。
-            // 占位记录已被移除，这里带上 usage 供 UXP 端按 token 计费。
-            reportToFeishu(
-              { ...optimizeRec, usage: resp.usage },
-              REPORT_PURPOSE.PROMPT_OPT,
-            );
-            const optimized = resp.content?.prompt;
-            if (optimized) {
-              opts.prompt.value = optimized;
-              opts.showToast("提示词已优化");
-            } else {
-              opts.showToast("优化成功但响应缺 content.prompt");
+          // 所有分支（含提前 return）都要把该 id 从在飞表摘除
+          try {
+            const idx = opts.records.value.findIndex((r) => r.id === id);
+            if (idx >= 0) {
+              // 删除占位 record（用户不需要在历史里看到一条"优化任务"）
+              opts.records.value.splice(idx, 1);
             }
-          } else if (resp.status === "failed" || resp.status === "cancelled") {
-            opts.showToast(`优化失败: ${resp.error?.message || resp.status}`);
+            if (err) {
+              console.error("[webview] optimizePrompt poll error:", err);
+              opts.showToast(`优化失败: ${err.message || err}`);
+              return;
+            }
+            if (!resp) {
+              opts.showToast("优化失败：查询无响应");
+              return;
+            }
+            if (resp.status === "succeeded") {
+              // 优化任务同样消耗额度，无论是否取到 content.prompt 都要上报。
+              // 占位记录已被移除，这里带上 usage 供 UXP 端按 token 计费。
+              reportToFeishu(
+                { ...optimizeRec, usage: resp.usage },
+                REPORT_PURPOSE.PROMPT_OPT,
+              );
+              const optimized = resp.content?.prompt;
+              if (optimized) {
+                opts.prompt.value = optimized;
+                opts.showToast("提示词已优化");
+              } else {
+                opts.showToast("优化成功但响应缺 content.prompt");
+              }
+            } else if (resp.status === "failed" || resp.status === "cancelled") {
+              opts.showToast(`优化失败: ${resp.error?.message || resp.status}`);
+            }
+            optimizingPrompt.value = false;
+          } finally {
+            inflight.delete(id);
           }
-          optimizingPrompt.value = false;
         },
       });
     } catch (e: any) {
@@ -648,13 +768,16 @@ export function useGenerationTasks(opts: {
   }
 
   return {
-    // 状态
+    // 状态（均由 inflight 在飞任务表派生）
     generating,
     pollingActive,
     optimizingPrompt,
     // 行为
     resumePolling,
     resumeNextGenerating,
+    // 在飞任务查询（切工程时保留非当前工程的在飞任务，避免卡在 generating）
+    getInflightRecords,
+    isInflight: (recordId: string) => inflight.has(recordId),
     submitGenerate,
     upgradeTo2K,
     retryRecord,
