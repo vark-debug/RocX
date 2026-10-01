@@ -14,11 +14,12 @@
  * 不做:不管理 records 防抖落盘(loadRecords 等在 useGenerationState 里);
  * 不管理 inflight 与 pollingActive 派生(都在 useInflight 里)。
  */
-import { ref } from "vue";
+import { ref, inject } from "vue";
 import { bridge } from "../services/bridge";
 import { MiniMaxProvider } from "../providers/minimax";
 import { getCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import { safeProviderCall } from "./useProviderSafe";
+import { SharedRefsKey } from "../providers/state";
 import { REPORT_PURPOSE } from "@shared/messages";
 import type {
   GenerationRecord,
@@ -53,17 +54,8 @@ export interface UseSubmitInflightApi {
 }
 
 export function useSubmit(opts: {
-  apiKey: RefAny<string | null>;
-  records: RefAny<GenerationRecord[]>;
-  prompt: RefAny<string>;
-  model: RefAny<any>;
-  ratio: RefAny<VideoRatio>;
-  duration: RefAny<number>;
-  resolution: RefAny<any>;
-  references: RefAny<ReferenceItem[]>;
-  projectInfo: RefAny<{ path: string; guid: string; name: string } | null>;
+  /** 不进 SharedRefs 的当前 provider id(useGenerationState 等仍按入参) */
   currentProviderId: RefAny<string>;
-  selectedRecordId: RefAny<string | null>;
   /** provider 中性查找 model 描述 */
   findModelDescriptor: (modelId: string, providerId?: string) => ModelDescriptor | null;
   /** toast */
@@ -72,15 +64,12 @@ export function useSubmit(opts: {
   inflightApi: UseSubmitInflightApi;
   /** 飞书上报回调(infligh.onTerminalSuccess / optimizePrompt 完成后调用) */
   reportToFeishu: (rec: GenerationRecord, purpose?: any) => void;
-  /** 异常 -> record.error 归一化 */
-  toRecordError: (e: any) => {
-    message: string;
-    requestId?: string;
-    httpStatus?: number;
-    errorType?: string;
-  };
 }) {
-  const { inflightApi, toRecordError } = opts;
+  const shared = inject(SharedRefsKey);
+  if (!shared) {
+    throw new Error("useSubmit requires SharedRefs provider in main-webview");
+  }
+  const { inflightApi } = opts;
   const { inflight, polling_, commitInflight, resumePolling, pollingActive } = inflightApi;
   const optimizingPrompt = ref(false);
 
@@ -122,7 +111,7 @@ export function useSubmit(opts: {
 
   // ---------- 提交生成 ----------
   async function submitGenerate() {
-    if (!opts.apiKey.value) return;
+    if (!shared.apiKey.value) return;
     const owner = await resolveSubmitOwner();
     if (!owner || !owner.path) {
       opts.showToast("无活动 PR 项目，无法记录生成历史");
@@ -130,7 +119,7 @@ export function useSubmit(opts: {
     }
     // 按 capability 校验当前模型是否支持视频生成(provider 抽象)
     const currentModelDesc = opts.findModelDescriptor(
-      opts.model.value,
+      shared.model.value,
       opts.currentProviderId.value,
     );
     if (
@@ -146,9 +135,9 @@ export function useSubmit(opts: {
     const now = new Date().toISOString();
     // 抓帧→PS 路径下,pendingUpload=true 的 ref 还差 fileId(用户没点修改完成),
     // 不能直接进 MiniMax createVideo(wireFormat 会 throw)。提交前先过滤并 toast 提示。
-    const refsForSubmit = opts.references.value.filter((r) => !r.pendingUpload);
-    if (refsForSubmit.length < opts.references.value.length) {
-      const skipped = opts.references.value.length - refsForSubmit.length;
+    const refsForSubmit = shared.references.value.filter((r) => !r.pendingUpload);
+    if (refsForSubmit.length < shared.references.value.length) {
+      const skipped = shared.references.value.length - refsForSubmit.length;
       opts.showToast(
         `已跳过 ${skipped} 张「✏ PS 中」的参考素材，请先点「修改完成」再生成`,
       );
@@ -156,12 +145,12 @@ export function useSubmit(opts: {
     const newRec: GenerationRecord = {
       id,
       createdAt: now,
-      prompt: opts.prompt.value,
+      prompt: shared.prompt.value,
       params: {
-        model: opts.model.value,
-        ratio: opts.ratio.value,
-        duration: opts.duration.value,
-        resolution: opts.resolution.value,
+        model: shared.model.value,
+        ratio: shared.ratio.value,
+        duration: shared.duration.value,
+        resolution: shared.resolution.value,
         provider: opts.currentProviderId.value,
       },
       references: [...refsForSubmit],
@@ -172,31 +161,31 @@ export function useSubmit(opts: {
       projectGuid: owner.guid,
       projectPath: owner.path,
     };
-    opts.records.value.unshift(newRec);
+    shared.records.value.unshift(newRec);
     console.log(
       `[gen][submit] 提交生成: record.guid=${newRec.projectGuid || "-"} record.path=${newRec.projectPath || "-"} 归属来源=${getCaptureContext() ? "抓素材锁定" : "实时活动工程"}`,
     );
-    opts.prompt.value = "";
+    shared.prompt.value = "";
     // 一次提交 = 一次完整的输入清空:参考素材 UI 同步置空,
     // 避免下一轮生成误带上本次的参考图/参考视频。
     // 磁盘上的原始文件不受影响(本地路径由 UXP 端管理)。
-    opts.references.value = [];
+    shared.references.value = [];
     // 素材列表变空 = 一批素材的边界结束,释放归属锁定。
     // 下一批抓素材会重新锁定(不跨批次继承)。
     resetCaptureContext();
     // 提交成功后 ratio=adaptive 在无 references 时不合法,自动回退到 16:9,
     // 让用户在继续输入 prompt 后「生成」按钮可立即可点。
-if (opts.ratio.value === "adaptive") {
-      opts.ratio.value = "16:9";
+if (shared.ratio.value === "adaptive") {
+      shared.ratio.value = "16:9";
     }
 
     const mini = new MiniMaxProvider();
     const reqPayload: VideoGenCreateRequest = {
-      model: opts.model.value,
+      model: shared.model.value,
       prompt: newRec.prompt,
-      ratio: opts.ratio.value,
-      duration: opts.duration.value,
-      resolution: opts.resolution.value,
+      ratio: shared.ratio.value,
+      duration: shared.duration.value,
+      resolution: shared.resolution.value,
       references: newRec.references,
     };
     if (__ROCX_DRY_RUN__) {
@@ -209,10 +198,10 @@ if (opts.ratio.value === "adaptive") {
         "(provider 架构下 dry-run 不发请求,只返回 mock task_id)",
         JSON.stringify(reqPayload),
       );
-      const idx = opts.records.value.findIndex((r) => r.id === id);
+      const idx = shared.records.value.findIndex((r) => r.id === id);
       if (idx >= 0) {
-        opts.records.value[idx] = {
-          ...opts.records.value[idx],
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
           taskId: task_id,
           status: "generating",
           // @ts-ignore
@@ -227,13 +216,13 @@ if (opts.ratio.value === "adaptive") {
     } else {
       // 实发模式:用 safeProviderCall 把 throw 转 {ok, error},失败直接写 record.error
       const r = await safeProviderCall(() =>
-        mini.createVideo(reqPayload, opts.apiKey.value),
+        mini.createVideo(reqPayload, shared.apiKey.value),
       );
       if (!r.ok) {
-        const idx = opts.records.value.findIndex((rec) => rec.id === id);
+        const idx = shared.records.value.findIndex((rec) => rec.id === id);
         if (idx >= 0) {
-          opts.records.value[idx] = {
-            ...opts.records.value[idx],
+          shared.records.value[idx] = {
+            ...shared.records.value[idx],
             status: "failed",
             error: r.error,
           };
@@ -241,10 +230,10 @@ if (opts.ratio.value === "adaptive") {
         return;
       }
       const task_id = r.data.taskId;
-      const idx = opts.records.value.findIndex((rec) => rec.id === id);
+      const idx = shared.records.value.findIndex((rec) => rec.id === id);
       if (idx >= 0) {
-        opts.records.value[idx] = {
-          ...opts.records.value[idx],
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
           taskId: task_id,
           status: "generating",
         };
@@ -261,7 +250,7 @@ if (opts.ratio.value === "adaptive") {
    * - 复用 resumePolling,等下载完成后再让用户选择导入到工程
    */
   async function upgradeTo2K(rec: GenerationRecord) {
-    if (!opts.apiKey.value) {
+    if (!shared.apiKey.value) {
       opts.showToast("请先在设置里填写 API Key");
       return;
     }
@@ -292,12 +281,12 @@ if (opts.ratio.value === "adaptive") {
       return;
     }
     // 防重复:已经升级过(按 parentTaskId 查)
-    const dup = opts.records.value.find(
+    const dup = shared.records.value.find(
       (r) => r.parentTaskId === rec.taskId && r.status !== "failed",
     );
     if (dup) {
       opts.showToast("该视频已存在升级任务，正在记录列表中");
-      opts.selectedRecordId.value = dup.id;
+      shared.selectedRecordId.value = dup.id;
       return;
     }
 
@@ -322,24 +311,24 @@ if (opts.ratio.value === "adaptive") {
       // 归属标记:跟随被升级的原记录。
       // 原记录可能属于其它工程(在飞任务切工程后仍会完成),
       // 此时不应把升级任务记到当前活动工程下。
-      projectGuid: rec.projectGuid ?? opts.projectInfo.value?.guid,
-      projectPath: rec.projectPath ?? opts.projectInfo.value?.path,
+      projectGuid: rec.projectGuid ?? shared.projectInfo.value?.guid,
+      projectPath: rec.projectPath ?? shared.projectInfo.value?.path,
     };
-    opts.records.value.unshift(upgradeRec);
+    shared.records.value.unshift(upgradeRec);
 
     const mini = new MiniMaxProvider();
     const r = await safeProviderCall(() =>
       mini.regenerateVideo!({
         sourceTaskId: rec.taskId,
         resolution: "2K",
-        apiKey: opts.apiKey.value,
+        apiKey: shared.apiKey.value,
       }),
     );
     if (!r.ok) {
-      const idx = opts.records.value.findIndex((rec) => rec.id === id);
+      const idx = shared.records.value.findIndex((rec) => rec.id === id);
       if (idx >= 0) {
-        opts.records.value[idx] = {
-          ...opts.records.value[idx],
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
           status: "failed",
           error: r.error,
         };
@@ -347,10 +336,10 @@ if (opts.ratio.value === "adaptive") {
       return;
     }
     const task_id = r.data.taskId;
-    const idx = opts.records.value.findIndex((rec) => rec.id === id);
+    const idx = shared.records.value.findIndex((rec) => rec.id === id);
     if (idx >= 0) {
-      opts.records.value[idx] = {
-        ...opts.records.value[idx],
+      shared.records.value[idx] = {
+        ...shared.records.value[idx],
         taskId: task_id,
         status: "generating",
       };
@@ -369,17 +358,17 @@ if (opts.ratio.value === "adaptive") {
    * - 复用现有 usePolling,与视频生成的轮询代码路径同源(共享 polling_ 实例与在飞登记表)
    */
   async function optimizePrompt() {
-    if (!opts.apiKey.value) {
+    if (!shared.apiKey.value) {
       opts.showToast("请先在设置里填写 API Key");
       return;
     }
-    if (!opts.prompt.value.trim()) {
+    if (!shared.prompt.value.trim()) {
       opts.showToast("请先填写提示词");
       return;
     }
     // 按 provider + model 的 capability 判断(不再硬编码 MiniMax-H3)
     const optimizeModelDesc = opts.findModelDescriptor(
-      opts.model.value,
+      shared.model.value,
       opts.currentProviderId.value,
     );
     if (
@@ -398,12 +387,12 @@ if (opts.ratio.value === "adaptive") {
     }
 
     // 仅取已上传成功的 references(有 fileId 的)
-    const validRefs = opts.references.value.filter((r) => !!r.fileId);
+    const validRefs = shared.references.value.filter((r) => !!r.fileId);
     // 与 createVideo 保持一致:无 references 时 ratio=adaptive 不合法
     const ratioArg: VideoRatio =
-      validRefs.length === 0 && opts.ratio.value === "adaptive"
+      validRefs.length === 0 && shared.ratio.value === "adaptive"
         ? "16:9"
-        : opts.ratio.value;
+        : shared.ratio.value;
 
     optimizingPrompt.value = true;
     // 优化请求是异步任务(h3_context_ir):用一个临时 record 占位,
@@ -413,11 +402,11 @@ if (opts.ratio.value === "adaptive") {
     const optimizeRec: GenerationRecord = {
       id,
       createdAt: now,
-      prompt: opts.prompt.value,
+      prompt: shared.prompt.value,
       params: {
-        model: opts.model.value,
+        model: shared.model.value,
         ratio: ratioArg,
-        duration: opts.duration.value,
+        duration: shared.duration.value,
         resolution: "768P",
         provider: opts.currentProviderId.value,
       },
@@ -425,18 +414,18 @@ if (opts.ratio.value === "adaptive") {
       status: "pending",
       submittedAt: now,
       // 归属标记:占位 record 同样带上,落盘按归属路由
-      projectGuid: opts.projectInfo.value?.guid,
-      projectPath: opts.projectInfo.value?.path,
+      projectGuid: shared.projectInfo.value?.guid,
+      projectPath: shared.projectInfo.value?.path,
     };
 
     const mini = new MiniMaxProvider();
     const r = await safeProviderCall(() =>
       mini.submitOptimizePrompt!({
-        prompt: opts.prompt.value,
-        duration: opts.duration.value,
+        prompt: shared.prompt.value,
+        duration: shared.duration.value,
         ratio: ratioArg,
         references: validRefs,
-        apiKey: opts.apiKey.value,
+        apiKey: shared.apiKey.value,
       }),
     );
     if (!r.ok) {
@@ -452,12 +441,12 @@ if (opts.ratio.value === "adaptive") {
       taskId: task_id,
       status: "generating",
     };
-    opts.records.value.unshift(optimizeRunRec);
+    shared.records.value.unshift(optimizeRunRec);
     // 登记进在飞任务表(generating / pollingActive 由它派生)
     inflight.set(id, { record: optimizeRunRec, polling: true });
     polling_.start({
       taskId: task_id,
-      apiKey: opts.apiKey.value,
+      apiKey: shared.apiKey.value,
       intervalMs: 3000, // IR 任务通常很快(秒级),3s 轮询体验更好
       onUpdate: (resp) => {
         commitInflight(id, { lastPolledAt: new Date().toISOString() });
@@ -465,10 +454,10 @@ if (opts.ratio.value === "adaptive") {
       onTerminal: (resp, err) => {
         // 所有分支(含提前 return)都要把该 id 从在飞表摘除
         try {
-          const idx = opts.records.value.findIndex((r) => r.id === id);
+          const idx = shared.records.value.findIndex((r) => r.id === id);
           if (idx >= 0) {
             // 删除占位 record(用户不需要在历史里看到一条"优化任务")
-            opts.records.value.splice(idx, 1);
+            shared.records.value.splice(idx, 1);
           }
           if (err) {
             console.error("[webview] optimizePrompt poll error:", err);
@@ -488,7 +477,7 @@ if (opts.ratio.value === "adaptive") {
             );
             const optimized = resp.content?.prompt;
             if (optimized) {
-              opts.prompt.value = optimized;
+              shared.prompt.value = optimized;
               opts.showToast("提示词已优化");
             } else {
               opts.showToast("优化成功但响应缺 content.prompt");
