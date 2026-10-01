@@ -269,12 +269,11 @@ export const recordsCore = {
       console.warn("[records] write 失败：无活动项目且记录缺少 projectPath");
       return { ok: false, error: "无活动项目", storageMode: "primary" };
     }
-    // 文件名基址：仅当 targetPath 就是活动工程时用 cur.name，
-    // 否则取自身 basename 去扩展名，避免「A 的目录 + B 的文件名」这种错配。
-    const targetName =
-      cur && cur.path === targetPath
-        ? cur.name
-        : targetPath.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || "";
+    // 文件名基址:始终从 targetPath 推导(去扩展名),不用 cur.name。
+    // 之前 cur && cur.path === targetPath 分支用 cur.name,在 PR Project API 下
+    // 包含 .prproj 扩展名 → 产出 "B.prproj.ai-gen.json";而历史归属路径分支
+    // 用 basename 去扩展名 → "B.ai-gen.json",两者不一致会同时写出两个文件。
+    const targetName = splitProjectPath(targetPath).base;
 
     // 写盘前剥离 thumbDataUrl（base64 data URL 会让 JSON 膨胀到几 MB，
     // 视频缩略图在 webview 端按需通过 readAsDataUrl(workFile) 重新读取）
