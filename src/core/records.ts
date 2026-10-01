@@ -9,6 +9,7 @@
 import { uxp } from "../globals";
 import type { ProjectRecords } from "@shared/messages";
 import { projectCore } from "./project";
+import { pathToFileUrl, getFs } from "./pathUtils";
 
 const FILENAME_SUFFIX = ".ai-gen.json";
 const FALLBACK_DIR = "ai-gen-records";
@@ -21,20 +22,6 @@ function hashPath(p: string): string {
     h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
   }
   return h.toString(16).padStart(8, "0");
-}
-
-function pathToFileUrl(p: string): string {
-  if (p.startsWith("file://")) return p;
-  // UXP getEntryWithUrl 内部自行百分号编码；预编码（含空格->%20）会被二次编码导致找不到
-  // Windows 绝对路径（"C:\..."）需要三斜杠 file:///C:/...；同时 UXP 在 Windows 上
-  // project.path 常带 "\\?\" 扩展长度前缀，需先剥离再拼（macOS 以 / 开头天然三斜杠）
-  const normalized = /^\\\\\?\\/.test(p) ? p.slice(4) : p;
-  if (/^[A-Za-z]:[\\/]/.test(normalized)) return "file:///" + normalized;
-  return "file://" + normalized;
-}
-
-function getFs(): any {
-  return uxp.storage.localFileSystem;
 }
 
 /** 从工程路径推导工程名（去掉目录与扩展名），用于拼接 <项目名>.ai-gen.json */
