@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // ---- 轻量 toast：UXP webview 不可依赖原生 alert ----
-import { ref, computed, onMounted, provide } from "vue";
+import { ref, computed, onMounted, provide, getCurrentInstance } from "vue";
 import * as webviewAPI from "./webview-api";
 import { initWebview } from "./webview-setup";
 import { setBridge, bridge } from "./services/bridge";
@@ -93,6 +93,13 @@ const selectedRecordId = ref<string | null>(null);
 // ---------- provide: 共享 refs 给 composables(V5.2) ----------
 // 10 个高频 ref 集中暴露给 useGenerationState / useSubmit / useImport 等
 // composable,避免 props 透传噪音。composable 内部通过 inject(SharedRefsKey) 拿。
+//
+// ⚠ Vue 3 根组件 setup 内的 provide / inject 失配:
+//    setup() 调用顺序是 provide → ... → 同 setup 内 inject(...),
+//    但 Vue 3 inject 在 instance.parent == null 时找 appContext.provides,
+//    而 provide 写到 instance.provides(Object.create(appContext.provides)),
+//    两者不是同一对象 → throw "injection \"...\" not found"。
+//    修复:同时直接写到 appContext.provides,这样两种 lookup path 都能命中。
 provide(SharedRefsKey, {
   apiKey,
   projectInfo,
@@ -105,6 +112,20 @@ provide(SharedRefsKey, {
   references,
   selectedRecordId,
 });
+getCurrentInstance()!.appContext.provides[
+  SharedRefsKey as unknown as symbol
+] = {
+  apiKey,
+  projectInfo,
+  records,
+  prompt,
+  model,
+  ratio,
+  duration,
+  resolution,
+  references,
+  selectedRecordId,
+};
 
 // ---------- 在飞任务登记表 + 飞书上报(顶层单例) ----------
 // 多个 composable 需要共享同一个 inflight / polling_ / newTaskUi,以支持
