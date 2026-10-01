@@ -21,7 +21,7 @@ import { getCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import { REPORT_PURPOSE } from "@shared/messages";
 import type {
   GenerationRecord,
-  MiniMaxRatio,
+  VideoRatio,
   ReferenceItem,
 } from "@shared/messages";
 import type { ModelDescriptor, VideoGenCapability } from "../providers/core/types";
@@ -53,7 +53,7 @@ export function useSubmit(opts: {
   records: RefAny<GenerationRecord[]>;
   prompt: RefAny<string>;
   model: RefAny<any>;
-  ratio: RefAny<MiniMaxRatio>;
+  ratio: RefAny<VideoRatio>;
   duration: RefAny<number>;
   resolution: RefAny<any>;
   references: RefAny<ReferenceItem[]>;
@@ -382,7 +382,7 @@ export function useSubmit(opts: {
     // 仅取已上传成功的 references(有 fileId 的)
     const validRefs = opts.references.value.filter((r) => !!r.fileId);
     // 与 createVideo 保持一致:无 references 时 ratio=adaptive 不合法
-    const ratioArg: MiniMaxRatio =
+    const ratioArg: VideoRatio =
       validRefs.length === 0 && opts.ratio.value === "adaptive"
         ? "16:9"
         : opts.ratio.value;

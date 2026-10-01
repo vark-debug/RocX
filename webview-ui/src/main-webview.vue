@@ -27,9 +27,9 @@ import type { VideoGenProvider } from "./providers/core/VideoGenProvider";
 
 import type {
   GenerationRecord,
-  MiniMaxModel,
-  MiniMaxRatio,
-  MiniMaxResolution,
+  VideoModel,
+  VideoRatio,
+  VideoResolution,
   ReferenceItem,
 } from "@shared/messages";
 
@@ -81,10 +81,10 @@ const projectInfo = ref<{ path: string; guid: string; name: string } | null>(nul
 const records = ref<GenerationRecord[]>([]);
 const storageMode = ref<"primary" | "fallback">("primary");
 const prompt = ref("");
-const model = ref<MiniMaxModel>("MiniMax-H3");
-const ratio = ref<MiniMaxRatio>("16:9");
+const model = ref<VideoModel>("MiniMax-H3");
+const ratio = ref<VideoRatio>("16:9");
 const duration = ref<number>(5);
-const resolution = ref<MiniMaxResolution>("768P");
+const resolution = ref<VideoResolution>("768P");
 const references = ref<ReferenceItem[]>([]);
 const settingsOpen = ref(false);
 const selectedRecordId = ref<string | null>(null);

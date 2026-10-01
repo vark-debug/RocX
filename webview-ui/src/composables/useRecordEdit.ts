@@ -15,9 +15,9 @@
 import { bridge } from "../services/bridge";
 import type {
   GenerationRecord,
-  MiniMaxModel,
-  MiniMaxRatio,
-  MiniMaxResolution,
+  VideoModel,
+  VideoRatio,
+  VideoResolution,
   ReferenceItem,
 } from "@shared/messages";
 
@@ -29,10 +29,10 @@ export function useRecordEdit(opts: {
   apiKey: RefAny<string | null>;
   records: RefAny<GenerationRecord[]>;
   prompt: RefAny<string>;
-  model: RefAny<MiniMaxModel>;
-  ratio: RefAny<MiniMaxRatio>;
+  model: RefAny<VideoModel>;
+  ratio: RefAny<VideoRatio>;
   duration: RefAny<number>;
-  resolution: RefAny<MiniMaxResolution>;
+  resolution: RefAny<VideoResolution>;
   references: RefAny<ReferenceItem[]>;
   /** 选中记录(retryRecord 切焦点用) */
   selectedRecordId: RefAny<string | null>;

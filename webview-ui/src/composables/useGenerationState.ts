@@ -16,12 +16,12 @@ import * as webviewAPI from "../webview-api";
 import { bridge } from "../services/bridge";
 import { DEFAULT_PROVIDER_ID } from "../providers/core/registry";
 import {
-  MINIMAX_PARAM_CONSTRAINTS,
+  VIDEO_PARAM_CONSTRAINTS,
   type GenerationRecord,
-  type MiniMaxModel,
-  type MiniMaxRatio,
-  type MiniMaxResolution,
-  type MiniMaxParamConstraints,
+  type VideoModel,
+  type VideoRatio,
+  type VideoResolution,
+  type VideoParamConstraints,
   type ProjectRecords,
   type ReferenceItem,
 } from "@shared/messages";
@@ -34,10 +34,10 @@ export function useGenerationState(opts: {
   records: RefAny<GenerationRecord[]>;
   storageMode: RefAny<"primary" | "fallback">;
   prompt: RefAny<string>;
-  model: RefAny<MiniMaxModel>;
-  ratio: RefAny<MiniMaxRatio>;
+  model: RefAny<VideoModel>;
+  ratio: RefAny<VideoRatio>;
   duration: RefAny<number>;
-  resolution: RefAny<MiniMaxResolution>;
+  resolution: RefAny<VideoResolution>;
   references: RefAny<ReferenceItem[]>;
   settingsOpen: RefAny<boolean>;
   /** 故障恢复时，扫描到 generating 记录就调它 */
@@ -45,8 +45,8 @@ export function useGenerationState(opts: {
   /** 取当前所有在飞任务的 record 副本（权威状态），用于切工程时保留非本工程在飞任务 */
   getInflightRecords: () => GenerationRecord[];
 }) {
-  const constraints = computed<MiniMaxParamConstraints>(
-    () => MINIMAX_PARAM_CONSTRAINTS[opts.model.value],
+  const constraints = computed<VideoParamConstraints>(
+    () => VIDEO_PARAM_CONSTRAINTS[opts.model.value],
   );
 
   // 限制 ratio/duration/resolution 在当前模型下合法

@@ -123,7 +123,7 @@ export interface GenerationRecord {
    * 用于把"原 768P 任务"和"升级出来的 2K 任务"关联起来，避免重复升级 / 重复扣费
    */
   parentTaskId?: string;
-  upgradedFromResolution?: MiniMaxResolution;
+  upgradedFromResolution?: VideoResolution;
   /**
    * 归属工程标识：PR 同一进程可打开多个工程，此字段标识本记录属于哪个工程。
    * - 用于「是否属于当前活动工程」的判定与 UI 归属提示
@@ -182,24 +182,16 @@ export const VIDEO_PARAM_CONSTRAINTS: Record<VideoModel, VideoParamConstraints> 
   },
 };
 
-// ===== 旧名 alias（保持向后兼容）=====
-/** @deprecated Use VideoModel instead. */
-export type MiniMaxModel = VideoModel;
-/** @deprecated Use VideoRatio instead. */
-export type MiniMaxRatio = VideoRatio;
-/** @deprecated Use VideoResolution instead. */
-export type MiniMaxResolution = VideoResolution;
-/** @deprecated Use VideoParamConstraints instead. */
-export type MiniMaxParamConstraints = VideoParamConstraints;
-/** @deprecated Use VIDEO_PARAM_CONSTRAINTS instead. */
-export const MINIMAX_PARAM_CONSTRAINTS = VIDEO_PARAM_CONSTRAINTS;
+// ===== MiniMax* 旧名 alias 已删除 (v2 refactor V1.1) =====
+// 旧名仅保留在 MiniMaxCreateRequest / MiniMaxCreateResponse / MiniMaxQueryResponse
+// 三个历史接口的命名上(V1.2 删除整个接口);字段类型已统一改为 Video* / VIDEO_*。
 
 export interface MiniMaxCreateRequest {
-  model: MiniMaxModel;
+  model: VideoModel;
   prompt: string;
-  ratio: MiniMaxRatio;
+  ratio: VideoRatio;
   duration: number;
-  resolution: MiniMaxResolution;
+  resolution: VideoResolution;
   references: ReferenceItem[];
 }
 

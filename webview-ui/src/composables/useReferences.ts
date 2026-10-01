@@ -16,14 +16,14 @@ import {
   type ReferenceItem,
   type FileKind,
   type GenerationRecord,
-  type MiniMaxParamConstraints,
+  type VideoParamConstraints,
 } from "@shared/messages";
 import type { ModelDescriptor } from "../providers/core/types";
 import { lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 
 export function useReferences(opts: {
   references: Ref<ReferenceItem[]>;
-  constraints: Ref<MiniMaxParamConstraints>;
+  constraints: Ref<VideoParamConstraints>;
   /** 抓视频后自动写回 duration / ratio */
   duration: Ref<number>;
   ratio: Ref<string>;
@@ -337,7 +337,7 @@ export function useReferences(opts: {
       const actual = ratioStringFromSize(r.width, r.height);
       if (actual) {
         // 优先从当前 model descriptor 拿合法 ratio（provider 中性、Task 5 后的权威来源）；
-        // fallback 到旧 MINIMAX_PARAM_CONSTRAINTS（向后兼容）
+        // fallback 到 VIDEO_PARAM_CONSTRAINTS 向后兼容（v2 V1.1 前是 MINIMAX_*）
         const currentModel = opts.findModelDescriptor(
           opts.getModelId(),
           opts.currentProviderId.value,
