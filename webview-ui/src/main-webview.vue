@@ -112,26 +112,18 @@ provide(SharedRefsKey, {
 // 然后把它的 API 传给 useSubmit / useGenerationState 等消费方。
 const feishuApi = useFeishuReport({ showToast });
 
+// useInflight 内部通过 inject 拿 apiKey/projectInfo/records;
+// 只暴露 onTerminalSuccess(顶层需要指定飞书上报回调)
 const inflightApi = useInflight({
-  apiKey,
-  projectInfo,
-  records,
   onTerminalSuccess: feishuApi.reportToFeishu,
 });
 
 // ---------- 提交 / 升级 / 优化提示词(消费 inflightApi) ----------
+// useSubmit 内部通过 inject 拿 9 个高频 ref;只暴露
+// currentProviderId(plan V5 决定不入 SharedRefs) +
+// findModelDescriptor / showToast / inflightApi / reportToFeishu
 const submitApi = useSubmit({
-  apiKey,
-  records,
-  prompt,
-  model,
-  ratio,
-  duration,
-  resolution,
-  references,
-  projectInfo,
   currentProviderId,
-  selectedRecordId,
   findModelDescriptor,
   showToast,
   inflightApi: {
@@ -142,46 +134,30 @@ const submitApi = useSubmit({
     pollingActive: inflightApi.pollingActive as any,
   },
   reportToFeishu: feishuApi.reportToFeishu,
-  toRecordError: feishuApi.toRecordError,
 });
 
 // ---------- 导入到工程 ----------
+// useImport 内部通过 inject 拿 records;只暴露 showToast
 const importApi = useImport({
-  records,
   showToast,
 });
 
 // ---------- 重试 / 删除记录 ----------
-const recordEditApi = useRecordEdit({
-  apiKey,
-  records,
-  prompt,
-  model,
-  ratio,
-  duration,
-  resolution,
-  references,
-  selectedRecordId,
-});
+// useRecordEdit 无入参,所有状态通过 inject 拿
+const recordEditApi = useRecordEdit();
 
 // ---------- 全局状态（依赖 inflightApi.resumePolling 做故障恢复） ----------
+// useGenerationState 内部通过 inject 拿 10 个高频 ref;
+// 只暴露 storageMode(不入 SharedRefs) + resumePolling/getInflightRecords
 const state = useGenerationState({
-  apiKey,
-  projectInfo,
-  records,
   storageMode,
-  prompt,
-  model,
-  ratio,
-  duration,
-  resolution,
-  references,
-  settingsOpen,
   resumePolling: inflightApi.resumePolling,
   getInflightRecords: inflightApi.getInflightRecords,
 });
 
 // ---------- 参考素材（依赖 state.constraints 做智能填写） ----------
+// useReferences 暂时保持 props 透传(规划 v3 下一期处理;
+// 本期 plan V5 不涵盖 useReferences)
 const refsApi = useReferences({
   references,
   constraints: state.constraints,

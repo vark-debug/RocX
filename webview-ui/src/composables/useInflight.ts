@@ -19,9 +19,10 @@
  * 不做:toast / 上报。终端成功的回调由调用方传入 onTerminalSuccess,
  *       飞书上报逻辑放在 useFeishuReport,避免 useInflight 与 toast 状态耦合。
  */
-import { computed, shallowReactive } from "vue";
+import { computed, shallowReactive, inject } from "vue";
 import { bridge } from "../services/bridge";
 import { usePolling } from "./usePolling";
+import { SharedRefsKey } from "../providers/state";
 import type { GenerationRecord } from "@shared/messages";
 
 type RefAny<T> = { value: T };
@@ -42,12 +43,13 @@ interface PollingStartOpts {
 }
 
 export function useInflight(opts: {
-  records: RefAny<GenerationRecord[]>;
-  projectInfo: RefAny<ProjectInfo | null>;
-  apiKey: RefAny<string | null>;
   /** 任务进入终态 succeeded 时回调(用于飞书上报等副作用);非阻塞 */
   onTerminalSuccess?: (rec: GenerationRecord, resp: any) => void;
 }) {
+  const shared = inject(SharedRefsKey);
+  if (!shared) {
+    throw new Error("useInflight requires SharedRefs provider in main-webview");
+  }
   const inflight = shallowReactive(
     new Map<string, { record: GenerationRecord; polling: boolean }>(),
   );
@@ -79,9 +81,9 @@ export function useInflight(opts: {
    * 权威状态仍保留在 inflight 里,不会丢。
    */
   function syncToRecords(next: GenerationRecord) {
-    const idx = opts.records.value.findIndex((r) => r.id === next.id);
+    const idx = shared.records.value.findIndex((r) => r.id === next.id);
     if (idx < 0) return;
-    const cur = opts.records.value[idx];
+    const cur = shared.records.value[idx];
     // 同一 id 但归属工程不一致:防御性判断,避免误改别的工程的记录
     if (
       (cur.projectGuid ?? "") !== (next.projectGuid ?? "") ||
@@ -89,7 +91,7 @@ export function useInflight(opts: {
     ) {
       return;
     }
-    opts.records.value[idx] = { ...cur, ...next };
+    shared.records.value[idx] = { ...cur, ...next };
   }
 
   /** 更新在飞登记表里的权威 record 副本(先),再尽力同步到 records 数组(后) */
@@ -108,7 +110,7 @@ export function useInflight(opts: {
    * (loadRecords 的故障恢复与 onTerminal 的 resumeNextGenerating 都会调进来)
    */
   function resumePolling(rec: GenerationRecord) {
-    if (!rec.taskId || !opts.apiKey.value) return;
+    if (!rec.taskId || !shared.apiKey.value) return;
     if (isPolling(rec.id)) return;
     // 登记进在飞任务表(已存在则更新为最新 record 副本)
     const prev = inflight.get(rec.id);
@@ -119,7 +121,7 @@ export function useInflight(opts: {
 
     const startOpts: PollingStartOpts = {
       taskId: rec.taskId,
-      apiKey: opts.apiKey.value,
+      apiKey: shared.apiKey.value,
       onUpdate: (resp) => {
         commitInflight(rec.id, {
           lastPolledAt: new Date().toISOString(),
@@ -211,7 +213,7 @@ export function useInflight(opts: {
    */
   const generating = computed<GenerationRecord | null>(() => {
     const list = getInflightRecords();
-    const cur = opts.projectInfo.value;
+    const cur = shared.projectInfo.value;
     return (
       list.find((r) => r.status === "generating" && belongsTo(r, cur)) ??
       list.find((r) => r.status === "generating") ??
