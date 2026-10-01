@@ -7,7 +7,11 @@ import { setBridge, bridge } from "./services/bridge";
 
 import { useGenerationState } from "./composables/useGenerationState";
 import { useReferences } from "./composables/useReferences";
-import { useGenerationTasks } from "./composables/useGenerationTasks";
+import { useInflight } from "./composables/useInflight";
+import { useFeishuReport } from "./composables/useFeishuReport";
+import { useSubmit } from "./composables/useSubmit";
+import { useImport } from "./composables/useImport";
+import { useRecordEdit } from "./composables/useRecordEdit";
 
 // ---- provider 抽象层（Task 1-2） ----
 import {
@@ -85,8 +89,21 @@ const references = ref<ReferenceItem[]>([]);
 const settingsOpen = ref(false);
 const selectedRecordId = ref<string | null>(null);
 
-// ---------- 任务生命周期（持有 generating / pollingActive / optimizingPrompt） ----------
-const tasks = useGenerationTasks({
+// ---------- 在飞任务登记表 + 飞书上报(顶层单例) ----------
+// 多个 composable 需要共享同一个 inflight / polling_ / newTaskUi,以支持
+// 多任务并行 + 切工程时保留非当前工程的在飞任务。因此先创建 useInflight 一次,
+// 然后把它的 API 传给 useSubmit / useGenerationState 等消费方。
+const feishuApi = useFeishuReport({ showToast });
+
+const inflightApi = useInflight({
+  apiKey,
+  projectInfo,
+  records,
+  onTerminalSuccess: feishuApi.reportToFeishu,
+});
+
+// ---------- 提交 / 升级 / 优化提示词(消费 inflightApi) ----------
+const submitApi = useSubmit({
   apiKey,
   records,
   prompt,
@@ -100,9 +117,37 @@ const tasks = useGenerationTasks({
   selectedRecordId,
   findModelDescriptor,
   showToast,
+  inflightApi: {
+    inflight: inflightApi.inflight as any,
+    polling_: inflightApi.polling_,
+    commitInflight: inflightApi.commitInflight,
+    resumePolling: inflightApi.resumePolling,
+    pollingActive: inflightApi.pollingActive as any,
+  },
+  reportToFeishu: feishuApi.reportToFeishu,
+  toRecordError: feishuApi.toRecordError,
 });
 
-// ---------- 全局状态（依赖 tasks.resumePolling 做故障恢复） ----------
+// ---------- 导入到工程 ----------
+const importApi = useImport({
+  records,
+  showToast,
+});
+
+// ---------- 重试 / 删除记录 ----------
+const recordEditApi = useRecordEdit({
+  apiKey,
+  records,
+  prompt,
+  model,
+  ratio,
+  duration,
+  resolution,
+  references,
+  selectedRecordId,
+});
+
+// ---------- 全局状态（依赖 inflightApi.resumePolling 做故障恢复） ----------
 const state = useGenerationState({
   apiKey,
   projectInfo,
@@ -115,8 +160,8 @@ const state = useGenerationState({
   resolution,
   references,
   settingsOpen,
-  resumePolling: tasks.resumePolling,
-  getInflightRecords: tasks.getInflightRecords,
+  resumePolling: inflightApi.resumePolling,
+  getInflightRecords: inflightApi.getInflightRecords,
 });
 
 // ---------- 参考素材（依赖 state.constraints 做智能填写） ----------
@@ -216,13 +261,13 @@ async function refreshProject() {
     <!-- 生成记录区：左列缩略图（可滚动）+ 右列详情（生成中/失败/已生成） -->
     <RecordsPanel
       :records="records"
-      :generating="tasks.generating.value"
+      :generating="inflightApi.generating.value"
       :current-project="projectInfo"
       @select="(rec: GenerationRecord) => (selectedRecordId = rec.id)"
-      @import-to-project="tasks.importToProject"
-      @retry="tasks.retryRecord"
+      @import-to-project="importApi.importToProject"
+      @retry="recordEditApi.retryRecord"
       @use-as-reference="refsApi.useAsReference"
-      @upgrade="tasks.upgradeTo2K"
+      @upgrade="submitApi.upgradeTo2K"
     />
 
     <!-- 底部状态条 -->
@@ -254,12 +299,12 @@ async function refreshProject() {
         :constraints="state.constraints.value"
         :has-references="references.length > 0"
         :can-submit="canSubmit"
-        :polling="tasks.pollingActive.value"
+        :polling="inflightApi.pollingActive.value"
         :has-api-key="!!apiKey"
         :has-project="!!projectInfo"
-        :optimizing="tasks.optimizingPrompt.value"
-        @submit="tasks.submitGenerate"
-        @optimize="tasks.optimizePrompt"
+        :optimizing="submitApi.optimizingPrompt.value"
+        @submit="submitApi.submitGenerate"
+        @optimize="submitApi.optimizePrompt"
       />
     </div>
     <div v-if="toastMsg" class="uxp-toast">{{ toastMsg }}</div>

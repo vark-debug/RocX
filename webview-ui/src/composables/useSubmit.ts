@@ -1,0 +1,494 @@
+/**
+ * 提交生成 / 升级 2K / 优化提示词 composable
+ *
+ * 责任:
+ * - submitGenerate(): 校验 capability / 写 pending record / 调 MiniMax createVideo /
+ *   dry-run 分支 / 启动轮询
+ * - upgradeTo2K(rec): 像素提升 re-create
+ * - optimizePrompt(): 异步任务复用 polling_,完成后把 prompt.content 写回 UI
+ * - resolveSubmitOwner(): 抓素材时锁定的 CaptureContext 优先,无锁定回落实时活动工程
+ *
+ * 共享状态从 useInflight 注入(inflight / polling_ / commitInflight / resumePolling),
+ * 上报通过外部传入的 callback (reportToFeishu),错误通过 toRecordError 归一化。
+ *
+ * 不做:不管理 records 防抖落盘(loadRecords 等在 useGenerationState 里);
+ * 不管理 inflight 与 pollingActive 派生(都在 useInflight 里)。
+ */
+import { ref } from "vue";
+import { bridge } from "../services/bridge";
+import { MiniMaxAPI } from "../services/MiniMax";
+import { getCaptureContext, resetCaptureContext } from "./useCaptureContext";
+import { REPORT_PURPOSE } from "@shared/messages";
+import type {
+  GenerationRecord,
+  MiniMaxRatio,
+  ReferenceItem,
+} from "@shared/messages";
+import type { ModelDescriptor, VideoGenCapability } from "../providers/core/types";
+
+// ---- 构建时常量：dry-run 调试开关(由 vite.config.ts 的 define 注入) ----
+declare const __ROCX_DRY_RUN__: boolean;
+
+type RefAny<T> = { value: T };
+
+export interface UseSubmitInflightApi {
+  inflight: Map<string, { record: GenerationRecord; polling: boolean }>;
+  polling_: {
+    start: (opts: {
+      taskId: string;
+      apiKey: string;
+      onUpdate: (resp: any) => void;
+      onTerminal: (resp: any, err?: Error) => void;
+      intervalMs?: number;
+    }) => Promise<void>;
+  };
+  commitInflight: (recId: string, patch: Partial<GenerationRecord>) => GenerationRecord | null;
+  resumePolling: (rec: GenerationRecord) => void;
+  /** 派生 pollingActive(供 optimizePrompt 防并发) */
+  pollingActive: RefAny<boolean>;
+}
+
+export function useSubmit(opts: {
+  apiKey: RefAny<string | null>;
+  records: RefAny<GenerationRecord[]>;
+  prompt: RefAny<string>;
+  model: RefAny<any>;
+  ratio: RefAny<MiniMaxRatio>;
+  duration: RefAny<number>;
+  resolution: RefAny<any>;
+  references: RefAny<ReferenceItem[]>;
+  projectInfo: RefAny<{ path: string; guid: string; name: string } | null>;
+  currentProviderId: RefAny<string>;
+  selectedRecordId: RefAny<string | null>;
+  /** provider 中性查找 model 描述 */
+  findModelDescriptor: (modelId: string, providerId?: string) => ModelDescriptor | null;
+  /** toast */
+  showToast: (msg: string | unknown) => void;
+  /** 共享 in-flight 表与轮询 */
+  inflightApi: UseSubmitInflightApi;
+  /** 飞书上报回调(infligh.onTerminalSuccess / optimizePrompt 完成后调用) */
+  reportToFeishu: (rec: GenerationRecord, purpose?: any) => void;
+  /** 异常 -> record.error 归一化 */
+  toRecordError: (e: any) => {
+    message: string;
+    requestId?: string;
+    httpStatus?: number;
+    errorType?: string;
+  };
+}) {
+  const { inflightApi, toRecordError } = opts;
+  const { inflight, polling_, commitInflight, resumePolling, pollingActive } = inflightApi;
+  const optimizingPrompt = ref(false);
+
+  /**
+   * 取本次提交应归属的工程。
+   *
+   * 归属是"赋值"而非"推断"：只要抓过素材,锁定值就在 CaptureContext 里,
+   * 一直保持到用户点生成 —— 期间切到哪个工程都不改变它。
+   * 纯文生视频(从未抓素材,context 为空)才回落到实时活动工程。
+   */
+  async function resolveSubmitOwner(): Promise<{
+    path: string;
+    guid: string;
+    name: string;
+  } | null> {
+    const locked = getCaptureContext();
+    if (locked) {
+      console.log(
+        `[gen] 归属来自抓素材锁定: path=${locked.projectPath} guid=${locked.projectGuid || "-"}`,
+      );
+      return {
+        path: locked.projectPath,
+        guid: locked.projectGuid,
+        name: locked.projectName,
+      };
+    }
+    // 纯文生视频:没有锁定值,用点击瞬间的实时活动工程
+    const live = await bridge.queryProjectState();
+    if (live.project?.path) {
+      console.log(`[gen] 无锁定归属(纯文生视频),用实时活动工程: ${live.project.path}`);
+      return {
+        path: live.project.path,
+        guid: String(live.project.guid ?? ""),
+        name: live.project.name ?? "",
+      };
+    }
+    return null;
+  }
+
+  // ---------- 提交生成 ----------
+  async function submitGenerate() {
+    if (!opts.apiKey.value) return;
+    const owner = await resolveSubmitOwner();
+    if (!owner || !owner.path) {
+      opts.showToast("无活动 PR 项目，无法记录生成历史");
+      return;
+    }
+    // 按 capability 校验当前模型是否支持视频生成(provider 抽象)
+    const currentModelDesc = opts.findModelDescriptor(
+      opts.model.value,
+      opts.currentProviderId.value,
+    );
+    if (
+      !currentModelDesc?.capabilities.includes(
+        "videoGeneration" as VideoGenCapability,
+      )
+    ) {
+      opts.showToast("当前模型不支持视频生成");
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    // 抓帧→PS 路径下,pendingUpload=true 的 ref 还差 fileId(用户没点修改完成),
+    // 不能直接进 MiniMax createVideo(wireFormat 会 throw)。提交前先过滤并 toast 提示。
+    const refsForSubmit = opts.references.value.filter((r) => !r.pendingUpload);
+    if (refsForSubmit.length < opts.references.value.length) {
+      const skipped = opts.references.value.length - refsForSubmit.length;
+      opts.showToast(
+        `已跳过 ${skipped} 张「✏ PS 中」的参考素材，请先点「修改完成」再生成`,
+      );
+    }
+    const newRec: GenerationRecord = {
+      id,
+      createdAt: now,
+      prompt: opts.prompt.value,
+      params: {
+        model: opts.model.value,
+        ratio: opts.ratio.value,
+        duration: opts.duration.value,
+        resolution: opts.resolution.value,
+        provider: opts.currentProviderId.value,
+      },
+      references: [...refsForSubmit],
+      status: "pending",
+      submittedAt: now,
+      // 归属标记:抓素材时锁定(纯文生视频为点击瞬间的实时活动工程),
+      // 任务完成后按此落盘,不受后续切换影响
+      projectGuid: owner.guid,
+      projectPath: owner.path,
+    };
+    opts.records.value.unshift(newRec);
+    console.log(
+      `[gen][submit] 提交生成: record.guid=${newRec.projectGuid || "-"} record.path=${newRec.projectPath || "-"} 归属来源=${getCaptureContext() ? "抓素材锁定" : "实时活动工程"}`,
+    );
+    opts.prompt.value = "";
+    // 一次提交 = 一次完整的输入清空:参考素材 UI 同步置空,
+    // 避免下一轮生成误带上本次的参考图/参考视频。
+    // 磁盘上的原始文件不受影响(本地路径由 UXP 端管理)。
+    opts.references.value = [];
+    // 素材列表变空 = 一批素材的边界结束,释放归属锁定。
+    // 下一批抓素材会重新锁定(不跨批次继承)。
+    resetCaptureContext();
+    // 提交成功后 ratio=adaptive 在无 references 时不合法,自动回退到 16:9,
+    // 让用户在继续输入 prompt 后「生成」按钮可立即可点。
+    if (opts.ratio.value === "adaptive") {
+      opts.ratio.value = "16:9";
+    }
+
+    try {
+      const mini = new MiniMaxAPI(opts.apiKey.value);
+      const reqPayload = {
+        model: opts.model.value,
+        prompt: newRec.prompt,
+        ratio: opts.ratio.value,
+        duration: opts.duration.value,
+        resolution: opts.resolution.value,
+        references: newRec.references,
+      };
+      if (__ROCX_DRY_RUN__) {
+        // 调试模式:仅打印请求,不实际发送
+        const { task_id, payload } = await mini.createVideoDryRun(reqPayload);
+        const idx = opts.records.value.findIndex((r) => r.id === id);
+        if (idx >= 0) {
+          opts.records.value[idx] = {
+            ...opts.records.value[idx],
+            taskId: task_id,
+            status: "generating",
+            // @ts-ignore
+            dryRunPayload: payload,
+          };
+        }
+        console.log(
+          "[MiniMax dry-run] 已写入 record.taskId =",
+          task_id,
+          "(dry-run 不会真正创建任务,不会启动轮询)",
+        );
+      } else {
+        // 实发模式
+        const { task_id } = await mini.createVideo(reqPayload);
+        const idx = opts.records.value.findIndex((r) => r.id === id);
+        if (idx >= 0) {
+          opts.records.value[idx] = {
+            ...opts.records.value[idx],
+            taskId: task_id,
+            status: "generating",
+          };
+        }
+        resumePolling({ ...newRec, taskId: task_id, status: "generating" });
+      }
+    } catch (e: any) {
+      const idx = opts.records.value.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        opts.records.value[idx] = {
+          ...opts.records.value[idx],
+          status: "failed",
+          error: toRecordError(e),
+        };
+      }
+    }
+  }
+
+  // ---------- 升级到 2K ----------
+  /**
+   * 像素提升:把已生成的 H3 768P 视频提交到 video_regeneration 升级为 2K
+   * - 限制:仅 H3 模型 + 768P 可升级(H3-Max 不支持 / 2K 已为最高档)
+   * - 实现:创建一条新 record(保留原 768P 不动),记录 parentTaskId + upgradedFromResolution
+   * - 复用 resumePolling,等下载完成后再让用户选择导入到工程
+   */
+  async function upgradeTo2K(rec: GenerationRecord) {
+    if (!opts.apiKey.value) {
+      opts.showToast("请先在设置里填写 API Key");
+      return;
+    }
+    if (!rec.taskId) {
+      opts.showToast("原记录缺少 task_id，无法升级");
+      return;
+    }
+    if (rec.status !== "generated" && rec.status !== "imported") {
+      opts.showToast("仅对已生成 / 已导入的视频可以升级");
+      return;
+    }
+    // 按 provider + model 的 capability 判断(不再硬编码 MiniMax-H3)
+    const upgradeModelDesc = opts.findModelDescriptor(
+      rec.params.model,
+      rec.params.provider,
+    );
+    if (
+      !upgradeModelDesc?.capabilities.includes(
+        "resolutionUpscale" as VideoGenCapability,
+      )
+    ) {
+      opts.showToast("当前模型不支持像素提升");
+      return;
+    }
+    // 业务规则保留:分辨率升级是 MiniMax 业务规则(768P → 2K)
+    if (rec.params.resolution !== "768P") {
+      opts.showToast("仅 768P 分辨率可升级到 2K");
+      return;
+    }
+    // 防重复:已经升级过(按 parentTaskId 查)
+    const dup = opts.records.value.find(
+      (r) => r.parentTaskId === rec.taskId && r.status !== "failed",
+    );
+    if (dup) {
+      opts.showToast("该视频已存在升级任务，正在记录列表中");
+      opts.selectedRecordId.value = dup.id;
+      return;
+    }
+
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const upgradeRec: GenerationRecord = {
+      id,
+      createdAt: now,
+      prompt: rec.prompt,
+      params: {
+        model: rec.params.model,
+        ratio: rec.params.ratio,
+        duration: rec.params.duration,
+        resolution: "2K",
+        provider: rec.params.provider || opts.currentProviderId.value,
+      },
+      references: [...rec.references],
+      status: "pending",
+      submittedAt: now,
+      parentTaskId: rec.taskId,
+      upgradedFromResolution: "768P",
+      // 归属标记:跟随被升级的原记录。
+      // 原记录可能属于其它工程(在飞任务切工程后仍会完成),
+      // 此时不应把升级任务记到当前活动工程下。
+      projectGuid: rec.projectGuid ?? opts.projectInfo.value?.guid,
+      projectPath: rec.projectPath ?? opts.projectInfo.value?.path,
+    };
+    opts.records.value.unshift(upgradeRec);
+
+    try {
+      const mini = new MiniMaxAPI(opts.apiKey.value);
+      const { task_id } = await mini.regenerateVideo({
+        sourceTaskId: rec.taskId,
+        resolution: "2K",
+      });
+      const idx = opts.records.value.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        opts.records.value[idx] = {
+          ...opts.records.value[idx],
+          taskId: task_id,
+          status: "generating",
+        };
+      }
+      resumePolling({ ...upgradeRec, taskId: task_id, status: "generating" });
+    } catch (e: any) {
+      const idx = opts.records.value.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        opts.records.value[idx] = {
+          ...opts.records.value[idx],
+          status: "failed",
+          error: toRecordError(e),
+        };
+      }
+    }
+  }
+
+  // ---------- 优化提示词 ----------
+  /**
+   * 提示词优化(h3_context_ir)
+   * - 官方接口是异步任务:POST 返回 { task_id },需 queryTask 轮询,
+   *   succeeded 后从 task.content.prompt 取优化后字符串
+   * - 限制:仅 H3 模型;prompt 非空;references 中若仍有未上传的 fileId 会被忽略
+   * - 行为:成功时直接覆盖填入 prompt 输入框(不创建 record,不计入历史)
+   * - ratio:与 createVideo 一致,无 references 时 'adaptive' 不合法,自动回退到 '16:9'
+   * - 复用现有 usePolling,与视频生成的轮询代码路径同源(共享 polling_ 实例与在飞登记表)
+   */
+  async function optimizePrompt() {
+    if (!opts.apiKey.value) {
+      opts.showToast("请先在设置里填写 API Key");
+      return;
+    }
+    if (!opts.prompt.value.trim()) {
+      opts.showToast("请先填写提示词");
+      return;
+    }
+    // 按 provider + model 的 capability 判断(不再硬编码 MiniMax-H3)
+    const optimizeModelDesc = opts.findModelDescriptor(
+      opts.model.value,
+      opts.currentProviderId.value,
+    );
+    if (
+      !optimizeModelDesc?.capabilities.includes(
+        "promptOptimization" as VideoGenCapability,
+      )
+    ) {
+      opts.showToast("当前模型不支持提示词优化");
+      return;
+    }
+    if (optimizingPrompt.value) return;
+    // 优化任务与视频生成共用在飞登记表:已有任务在飞时拒绝并发提交
+    if (pollingActive.value) {
+      opts.showToast("有视频生成正在轮询，请稍候再试");
+      return;
+    }
+
+    // 仅取已上传成功的 references(有 fileId 的)
+    const validRefs = opts.references.value.filter((r) => !!r.fileId);
+    // 与 createVideo 保持一致:无 references 时 ratio=adaptive 不合法
+    const ratioArg: MiniMaxRatio =
+      validRefs.length === 0 && opts.ratio.value === "adaptive"
+        ? "16:9"
+        : opts.ratio.value;
+
+    optimizingPrompt.value = true;
+    // 优化请求是异步任务(h3_context_ir):用一个临时 record 占位,
+    // 让 polling_ 的状态机正常运转;完成后把 prompt.content 写回 UI。
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const optimizeRec: GenerationRecord = {
+      id,
+      createdAt: now,
+      prompt: opts.prompt.value,
+      params: {
+        model: opts.model.value,
+        ratio: ratioArg,
+        duration: opts.duration.value,
+        resolution: "768P",
+        provider: opts.currentProviderId.value,
+      },
+      references: [...validRefs],
+      status: "pending",
+      submittedAt: now,
+      // 归属标记:占位 record 同样带上,落盘按归属路由
+      projectGuid: opts.projectInfo.value?.guid,
+      projectPath: opts.projectInfo.value?.path,
+    };
+
+    try {
+      const mini = new MiniMaxAPI(opts.apiKey.value);
+      const { task_id } = await mini.submitOptimizePrompt({
+        prompt: opts.prompt.value,
+        duration: opts.duration.value,
+        ratio: ratioArg,
+        references: validRefs,
+      });
+      // 占位 record 写入 records,便于统一走 polling 流;status 始终为 'generating'
+      const optimizeRunRec: GenerationRecord = {
+        ...optimizeRec,
+        taskId: task_id,
+        status: "generating",
+      };
+      opts.records.value.unshift(optimizeRunRec);
+      // 登记进在飞任务表(generating / pollingActive 由它派生)
+      inflight.set(id, { record: optimizeRunRec, polling: true });
+      polling_.start({
+        taskId: task_id,
+        apiKey: opts.apiKey.value,
+        intervalMs: 3000, // IR 任务通常很快(秒级),3s 轮询体验更好
+        onUpdate: (resp) => {
+          commitInflight(id, { lastPolledAt: new Date().toISOString() });
+        },
+        onTerminal: (resp, err) => {
+          // 所有分支(含提前 return)都要把该 id 从在飞表摘除
+          try {
+            const idx = opts.records.value.findIndex((r) => r.id === id);
+            if (idx >= 0) {
+              // 删除占位 record(用户不需要在历史里看到一条"优化任务")
+              opts.records.value.splice(idx, 1);
+            }
+            if (err) {
+              console.error("[webview] optimizePrompt poll error:", err);
+              opts.showToast(`优化失败: ${err.message || err}`);
+              return;
+            }
+            if (!resp) {
+              opts.showToast("优化失败:查询无响应");
+              return;
+            }
+            if (resp.status === "succeeded") {
+              // 优化任务同样消耗额度,无论是否取到 content.prompt 都要上报。
+              // 占位记录已被移除,这里带上 usage 供 UXP 端按 token 计费。
+              opts.reportToFeishu(
+                { ...optimizeRec, usage: resp.usage },
+                REPORT_PURPOSE.PROMPT_OPT,
+              );
+              const optimized = resp.content?.prompt;
+              if (optimized) {
+                opts.prompt.value = optimized;
+                opts.showToast("提示词已优化");
+              } else {
+                opts.showToast("优化成功但响应缺 content.prompt");
+              }
+            } else if (resp.status === "failed" || resp.status === "cancelled") {
+              opts.showToast(`优化失败: ${resp.error?.message || resp.status}`);
+            }
+            optimizingPrompt.value = false;
+          } finally {
+            inflight.delete(id);
+          }
+        },
+      });
+    } catch (e: any) {
+      console.error("[webview] optimizePrompt failed:", e);
+      opts.showToast(`优化失败: ${e?.message || e}`);
+      optimizingPrompt.value = false;
+    }
+  }
+
+  return {
+    /** 状态 */
+    optimizingPrompt,
+    /** 行为 */
+    submitGenerate,
+    upgradeTo2K,
+    optimizePrompt,
+    resolveSubmitOwner,
+  };
+}
