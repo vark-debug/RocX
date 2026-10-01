@@ -6,15 +6,15 @@
  * - 状态变化通过回调通知；终态（succeeded/failed/cancelled）或连续失败 6 次后结束该任务
  */
 import { computed, onBeforeUnmount, shallowReactive } from "vue";
-import { MiniMaxAPI } from "../services/MiniMax";
-import type { MiniMaxQueryResponse } from "@shared/messages";
+import { MiniMaxProvider } from "../providers/minimax";
+import type { VideoGenQueryResponse } from "../providers/core/types";
 
 export interface PollingOpts {
   taskId: string;
   apiKey: string;
   intervalMs?: number;
-  onUpdate: (resp: MiniMaxQueryResponse) => void;
-  onTerminal: (resp: MiniMaxQueryResponse | null, error?: Error) => void;
+  onUpdate: (resp: VideoGenQueryResponse) => void;
+  onTerminal: (resp: VideoGenQueryResponse | null, error?: Error) => void;
 }
 
 const POLL_INTERVAL = 5000;
@@ -71,9 +71,9 @@ export function usePolling() {
     const tick = async () => {
       // 只认自己的 state：既防被 stopOne 掐断，也防同 taskId 重新 start 后旧 tick 复活
       if (state.stopped || pollers.get(opts.taskId) !== state) return;
-      const api = new MiniMaxAPI(opts.apiKey);
+      const api = new MiniMaxProvider();
       try {
-        const resp = await api.queryTask(opts.taskId);
+        const resp = await api.queryTask(opts.taskId, opts.apiKey);
         state.consecutiveError = 0;
         state.interval = opts.intervalMs ?? POLL_INTERVAL;
         opts.onUpdate(resp);

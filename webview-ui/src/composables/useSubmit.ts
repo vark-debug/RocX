@@ -16,7 +16,7 @@
  */
 import { ref } from "vue";
 import { bridge } from "../services/bridge";
-import { MiniMaxAPI } from "../services/MiniMax";
+import { MiniMaxProvider } from "../providers/minimax";
 import { getCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import { REPORT_PURPOSE } from "@shared/messages";
 import type {
@@ -24,7 +24,10 @@ import type {
   VideoRatio,
   ReferenceItem,
 } from "@shared/messages";
-import type { ModelDescriptor, VideoGenCapability } from "../providers/core/types";
+import type {
+  VideoGenCapability,
+  VideoGenCreateRequest,
+} from "../providers/core/types";
 
 // ---- 构建时常量：dry-run 调试开关(由 vite.config.ts 的 define 注入) ----
 declare const __ROCX_DRY_RUN__: boolean;
@@ -186,9 +189,9 @@ export function useSubmit(opts: {
       opts.ratio.value = "16:9";
     }
 
-    try {
-      const mini = new MiniMaxAPI(opts.apiKey.value);
-      const reqPayload = {
+try {
+      const mini = new MiniMaxProvider();
+      const reqPayload: VideoGenCreateRequest = {
         model: opts.model.value,
         prompt: newRec.prompt,
         ratio: opts.ratio.value,
@@ -197,8 +200,15 @@ export function useSubmit(opts: {
         references: newRec.references,
       };
       if (__ROCX_DRY_RUN__) {
-        // 调试模式:仅打印请求,不实际发送
-        const { task_id, payload } = await mini.createVideoDryRun(reqPayload);
+        // 调试模式：仅打印请求，不实际发送
+        // dry-run 在新 provider 架构下不再构建真实 payload，返回 mock task_id
+        const task_id = `dryrun_${Date.now()}`;
+        console.log(
+          "%c[MiniMax createVideo DRY-RUN]",
+          "color:#4b9cf5;font-weight:bold",
+          "(provider 架构下 dry-run 不发请求,只返回 mock task_id)",
+          JSON.stringify(reqPayload),
+        );
         const idx = opts.records.value.findIndex((r) => r.id === id);
         if (idx >= 0) {
           opts.records.value[idx] = {
@@ -206,7 +216,7 @@ export function useSubmit(opts: {
             taskId: task_id,
             status: "generating",
             // @ts-ignore
-            dryRunPayload: payload,
+            dryRunPayload: null,
           };
         }
         console.log(
@@ -216,7 +226,8 @@ export function useSubmit(opts: {
         );
       } else {
         // 实发模式
-        const { task_id } = await mini.createVideo(reqPayload);
+        const r = await mini.createVideo(reqPayload, opts.apiKey.value);
+        const task_id = r.taskId;
         const idx = opts.records.value.findIndex((r) => r.id === id);
         if (idx >= 0) {
           opts.records.value[idx] = {
@@ -314,11 +325,13 @@ export function useSubmit(opts: {
     opts.records.value.unshift(upgradeRec);
 
     try {
-      const mini = new MiniMaxAPI(opts.apiKey.value);
-      const { task_id } = await mini.regenerateVideo({
+      const mini = new MiniMaxProvider();
+      const r = await mini.regenerateVideo!({
         sourceTaskId: rec.taskId,
         resolution: "2K",
+        apiKey: opts.apiKey.value,
       });
+      const task_id = r.taskId;
       const idx = opts.records.value.findIndex((r) => r.id === id);
       if (idx >= 0) {
         opts.records.value[idx] = {
@@ -412,13 +425,15 @@ export function useSubmit(opts: {
     };
 
     try {
-      const mini = new MiniMaxAPI(opts.apiKey.value);
-      const { task_id } = await mini.submitOptimizePrompt({
+      const mini = new MiniMaxProvider();
+      const r = await mini.submitOptimizePrompt!({
         prompt: opts.prompt.value,
         duration: opts.duration.value,
         ratio: ratioArg,
         references: validRefs,
+        apiKey: opts.apiKey.value,
       });
+      const task_id = r.taskId;
       // 占位 record 写入 records,便于统一走 polling 流;status 始终为 'generating'
       const optimizeRunRec: GenerationRecord = {
         ...optimizeRec,

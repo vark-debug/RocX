@@ -77,15 +77,15 @@ async function save() {
 
 // ---------- 仅 DEV 模式可见的调试工具 ----------
 // 通过 __ROCX_DEV__ 构建时常量控制：MODE=dev 时为 true，build/zip 时为 false，
-// 整段 if (false) 块被 esbuild 静态消除，连带 MiniMaxAPI import 在 ccx 中不再出现。
+// 整段 if (false) 块被 esbuild 静态消除，连带 MiniMaxProvider import 在 ccx 中不再出现。
 if (__ROCX_DEV__) {
   // 延迟引入，避免非 dev 模式加载
-  import("../services/MiniMax").then(({ MiniMaxAPI }) => {
-    attachDebugHandlers(MiniMaxAPI);
+  import("../providers/minimax").then(({ MiniMaxProvider }) => {
+    attachDebugHandlers(MiniMaxProvider);
   });
 }
 
-function attachDebugHandlers(MiniMaxAPI: any) {
+function attachDebugHandlers(MiniMaxProvider: any) {
   // 通过全局函数挂载调试入口（保持模板的 @click 绑定无需变）
   ;(window as any).__rocx_debug_queryTask = async () => {
     const taskId = (document.querySelector(".debug-input") as HTMLInputElement)?.value?.trim();
@@ -96,8 +96,8 @@ function attachDebugHandlers(MiniMaxAPI: any) {
     }
     if (r) r.textContent = "查询中...";
     try {
-      const api = new MiniMaxAPI(apiKey.value.trim());
-      const resp = await api.queryTask(taskId);
+      const api = new MiniMaxProvider();
+      const resp = await api.queryTask(taskId, apiKey.value.trim());
       if (r) r.textContent = JSON.stringify(resp, null, 2);
     } catch (e: any) {
       if (r) r.textContent = `异常: ${String(e?.message || e)}`;

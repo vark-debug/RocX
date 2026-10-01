@@ -9,7 +9,7 @@
  * 这样 video upload / 多工程并行 / 升级任务都可以复用同一上报入口。
  */
 import { bridge } from "../services/bridge";
-import { MiniMaxError } from "../services/MiniMax";
+import { VideoGenError } from "../providers/core/errors";
 import type { GenerationRecord, ReportPurpose } from "@shared/messages";
 
 type RefAny<T> = { value: T };
@@ -21,7 +21,7 @@ export function toRecordError(e: any): {
   httpStatus?: number;
   errorType?: string;
 } {
-  if (e instanceof MiniMaxError) {
+  if (e instanceof VideoGenError) {
     return {
       message: e.message,
       requestId: e.requestId,
