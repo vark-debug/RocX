@@ -221,9 +221,17 @@ export function useReferences(opts: {
     bridge.openInPhotoshop(r.reference.localPath).then((rs) => {
       if (!rs.ok) {
         console.warn(
-          "[webview] openInPhotoshop failed (PS 未启动 / launchProcess 未授权)：",
+          "[webview][ps-launch] ❌ 拉起 PS 失败:",
           rs.error,
         );
+      } else {
+        const via =
+          rs.source === "native"
+            ? "C++ Hybrid addon"
+            : rs.source === "launcher"
+              ? "launcher 脚本"
+              : "系统关联兜底";
+        console.log(`[webview][ps-launch] ✅ 拉起 PS 走的是: ${via} (source=${rs.source})`);
       }
     });
   }

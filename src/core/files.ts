@@ -264,41 +264,51 @@ export const filesCore = {
     localPath: string,
   ): Promise<{ ok: boolean; source: "native" | "launcher" | "fallback"; error?: string }> {
     if (!localPath) return { ok: false, source: "fallback", error: "路径为空" };
+    console.log(`[files][ps-launch] 开始拉起 PS, localPath=${localPath}`);
 
     // 1) C++ Hybrid Plugin
-    try {
-      // UXP Hybrid Plugin:`require("name.uxpaddon")` 返回 Promise，必须 await
-      const addon: any = await (require as any)("RocXBridge.uxpaddon");
-      if (addon && typeof addon.openFileInPhotoshop === "function") {
-        const r = await addon.openFileInPhotoshop(localPath);
-        if (r && r.ok) {
-          return { ok: true, source: "native" };
-        }
-        if (r && r.error) {
-          console.warn("[files] hybrid addon returned error, fallback to launcher:", r.error);
-        }
-      } else {
-        console.warn("[files] hybrid addon loaded but openFileInPhotoshop missing");
-      }
-    } catch (e: any) {
-      // MODULE_NOT_FOUND / Addon is not supported / PR 版本过低 / uxpaddon 缺失
-      console.warn(
-        "[files] hybrid addon unavailable, fallback to launcher script:",
-        e?.message || e,
-      );
-    }
+    // 【实机测试中】暂时注释掉 hybrid 调用：Hybrid Plugin 会抬高 PR 版本门槛，
+    // 本机 PR 版本不满足，无法验证 launcher 脚本路径。验证完请恢复本段。
+    // try {
+    //   // UXP Hybrid Plugin:`require("name.uxpaddon")` 返回 Promise，必须 await
+    //   const addon: any = await (require as any)("RocXBridge.uxpaddon");
+    //   if (addon && typeof addon.openFileInPhotoshop === "function") {
+    //     const r = await addon.openFileInPhotoshop(localPath);
+    //     if (r && r.ok) {
+    //       return { ok: true, source: "native" };
+    //     }
+    //     if (r && r.error) {
+    //       console.warn("[files] hybrid addon returned error, fallback to launcher:", r.error);
+    //     }
+    //   } else {
+    //     console.warn("[files] hybrid addon loaded but openFileInPhotoshop missing");
+    //   }
+    // } catch (e: any) {
+    //   // MODULE_NOT_FOUND / Addon is not supported / PR 版本过低 / uxpaddon 缺失
+    //   console.warn(
+    //     "[files] hybrid addon unavailable, fallback to launcher script:",
+    //     e?.message || e,
+    //   );
+    // }
+    console.log("[files][ps-launch] 跳过 C++ Hybrid 路径（实机测试临时禁用）");
 
     // 2) Launcher 脚本
     const l = await this.openWithPhotoshopLauncher(localPath);
     if (l.ok) {
+      console.log("[files][ps-launch] ✅ 命中路径: launcher 脚本 (launcher.cmd/.command)");
       return { ok: true, source: "launcher" };
     }
     if (l.error) {
-      console.warn("[files] launcher script failed, fallback to system:", l.error);
+      console.warn(
+        `[files][ps-launch] launcher 脚本失败, 降级系统关联: ${l.error}`,
+      );
     }
 
     // 3) 系统兜底
     const f = await this.openWithPhotoshop(localPath);
+    console.log(
+      `[files][ps-launch] ${f.ok ? "✅" : "❌"} 命中路径: 系统关联兜底 (shell.openPath)${f.error ? `, error=${f.error}` : ""}`,
+    );
     return { ok: f.ok, source: "fallback", error: f.error };
   },
 
@@ -362,6 +372,7 @@ export const filesCore = {
       }
       const sep = pluginRoot.includes("\\") ? "\\" : "/";
       const launcherPath = `${pluginRoot.replace(/[\/\\]+$/, "")}${sep}${launcherName}`;
+      console.log(`[files][ps-launch] launcher 脚本路径: ${launcherPath}`);
       // 探测 launcher 是否在 plugin root 内,失败给出清晰错误
       const probeUrl = `file:///${pluginRoot.replace(/\\/g, "/").replace(/^\//, "")}/${launcherName}`;
       try {

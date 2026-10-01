@@ -453,12 +453,14 @@ export interface UxptoWebviewAPI {
   }>;
 
   /**
-   * 用系统关联启动 Photoshop 打开指定本地文件（抓帧→PS 路径）。
-   * 优先 shell.openExternal("file://" + encodeURI(localPath))；失败退到 shell.openPath。
+   * 拉起 Photoshop 打开指定本地文件（抓帧→PS 路径）。
+   * 内部按 C++ Hybrid addon → launcher 脚本 → 系统关联兜底 顺序尝试，
+   * `source` 返回实际命中的那条路径，供实机诊断日志使用。
    * 异常一律吞掉转成 {ok:false}，webview 端不据此报错，只 console.warn。
    */
   openInPhotoshop(localPath: string): Promise<{
     ok: boolean;
+    source?: "native" | "launcher" | "fallback";
     error?: string;
   }>;
 
