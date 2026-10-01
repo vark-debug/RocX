@@ -4,18 +4,24 @@
  * 责任:
  * - importToProject(ids): 调 bridge.importToProject + 同步 records.workFile 新路径 + toast
  *
- * 不做:不持有 inflight / records 数组以外的状态;records 由调用方传入。
+ * 状态注入:从 main-webview.vue 顶层 provide 的 SharedRefsKey 取 records;
+ * showToast 仍由调用方注入(可能在多个场景下复用)。
+ *
  * 桥失败 / 业务失败都仅 toast,不抛错(与原 useGenerationTasks 行为一致)。
  */
+import { inject } from "vue";
 import { bridge } from "../services/bridge";
+import { SharedRefsKey } from "../providers/state";
 import type { GenerationRecord } from "@shared/messages";
 
-type RefAny<T> = { value: T };
-
 export function useImport(opts: {
-  records: RefAny<GenerationRecord[]>;
   showToast: (msg: string | unknown) => void;
 }) {
+  const shared = inject(SharedRefsKey);
+  if (!shared) {
+    throw new Error("useImport requires SharedRefs provider in main-webview");
+  }
+
   async function importToProject(ids: string[]) {
     let r: any;
     try {
@@ -30,10 +36,10 @@ export function useImport(opts: {
       // (主进程已持久化 records.json,这里更新 UI 状态保持一致,深 watch 会自动落盘相同数据)
       if (r.moved?.length) {
         for (const m of r.moved) {
-          const idx = opts.records.value.findIndex((x) => x.id === m.recordId);
-          if (idx >= 0 && opts.records.value[idx].workFile !== m.newPath) {
-            opts.records.value[idx] = {
-              ...opts.records.value[idx],
+          const idx = shared.records.value.findIndex((x) => x.id === m.recordId);
+          if (idx >= 0 && shared.records.value[idx].workFile !== m.newPath) {
+            shared.records.value[idx] = {
+              ...shared.records.value[idx],
               workFile: m.newPath,
             };
           }
