@@ -135,12 +135,36 @@ export interface GenerationRecord {
   projectPath?: string;
 }
 
+export interface PromptOptimization {
+  /** 本次优化前的 prompt 文本 */
+  originalPrompt: string;
+  /** provider 优化后的 prompt 文本(成功时;失败则缺省) */
+  optimizedPrompt?: string;
+  /** 是否成功(失败时仍落盘,作为失败历史可追溯) */
+  success: boolean;
+  /** provider id(便于审计未来多 provider 场景) */
+  provider: string;
+  /** 关联的 references(用户调试时回看哪批素材下做的优化) */
+  references: ReferenceItem[];
+  /** ISO 时间戳 */
+  createdAt: string;
+  /** 错误信息(失败时) */
+  error?: string;
+  /** provider 用量;仅 UI 优化成功时上报飞书用 */
+  usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
+}
+
 export interface ProjectRecords {
   projectGuid: string;
   projectPath: string;
   records: GenerationRecord[];
   /** 记录文件落盘位置模式：'primary' = 项目旁；'fallback' = 插件数据目录 */
   storageMode: "primary" | "fallback";
+  /**
+   * 提示词优化历史(不入 records 数组,不显示在记录列表)。
+   * 与生成 records 同盘,共享 primary / fallback 落盘路由;前端轮询时按需加载。
+   */
+  promptOptimizations?: PromptOptimization[];
 }
 
 // ===== 中性命名（推荐新代码使用）=====

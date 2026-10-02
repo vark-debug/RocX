@@ -11,7 +11,7 @@
  *
  * 行为与原 main-webview.vue 完全一致。
  */
-import { computed, ref, watch, onBeforeUnmount, inject } from "vue";
+import { computed, ref, watch, onBeforeUnmount, inject, shallowRef } from "vue";
 import * as webviewAPI from "../webview-api";
 import { bridge } from "../services/bridge";
 import { DEFAULT_PROVIDER_ID } from "../providers/core/registry";
@@ -21,6 +21,7 @@ import {
   type GenerationRecord,
   type VideoParamConstraints,
   type ProjectRecords,
+  type PromptOptimization,
 } from "@shared/messages";
 
 type RefAny<T> = { value: T };
@@ -40,6 +41,13 @@ export function useGenerationState(opts: {
   const constraints = computed<VideoParamConstraints>(
     () => VIDEO_PARAM_CONSTRAINTS[shared.model.value],
   );
+
+  /**
+   * 提示词优化历史(同盘,不入 records 列表)。
+   * 与 videoGenerate records 同 JSON 文件,落盘路由一致(主路径优先),
+   * 共享 primary / fallback 切换;前端不显示在记录列表。
+   */
+  const promptOptimizations = ref<PromptOptimization[]>([]);
 
   // 限制 ratio/duration/resolution 在当前模型下合法
   watch(shared.model, () => {
@@ -132,6 +140,8 @@ export function useGenerationState(opts: {
       // 注意:不再覆盖 opts.storageMode —— 现在 storageMode 靠实时 probePrimary()
       // (main-webview mount + onProjectChanged 时跑)刷新,JSON 里的 storageMode 字段
       // 仍保留以便 migrate 历史数据,但不参与 UI 显示判断。
+      // 提示词优化历史(不入 records,独立字段;若盘上缺省为空数组)
+      promptOptimizations.value = data.promptOptimizations ?? [];
       // 故障恢复：只对本工程的 generating 记录恢复轮询（resumePolling 内部有防重复判断）
       for (const rec of shared.records.value) {
         const isCur = cur.guid
@@ -196,10 +206,18 @@ export function useGenerationState(opts: {
         })),
       );
       for (const g of groups.values()) {
-        const data: ProjectRecords = { ...g, storageMode: opts.storageMode.value };
+        // promptOptimizations 与 records 同盘、同路由。
+        // 归属:当前工程的优化历史归入当前工程(优化任务与 videoGen 共用 CaptureContext
+        // 锁定,落盘时归属一致);切工程后旧工程的历史归属旧工程路径(由其自身 JSON 持有)。
+        const opts4thisGroup = g.projectPath === cur?.path ? promptOptimizations.value : [];
+        const data: ProjectRecords = {
+          ...g,
+          storageMode: opts.storageMode.value,
+          promptOptimizations: opts4thisGroup,
+        };
         const w = await bridge.recordsWrite(data);
         console.log(
-          `[gen][persist] 写入完成 path=${g.projectPath} count=${g.records.length} ok=${w.ok} mode=${w.storageMode ?? "-"} err=${w.error ?? "-"}`,
+          `[gen][persist] 写入完成 path=${g.projectPath} count=${g.records.length} promptOpts=${opts4thisGroup.length} ok=${w.ok} mode=${w.storageMode ?? "-"} err=${w.error ?? "-"}`,
         );
         // 注意:写盘后不再用 w.storageMode 覆盖 opts.storageMode —— 该 ref 由实时
         // probePrimary() 驱动(mount + onProjectChanged),保证 UI 与当前可写性一致。
@@ -207,7 +225,11 @@ export function useGenerationState(opts: {
     }, 200);
   }
 
-  watch(shared.records, () => persistRecords(), { deep: true });
+  watch(
+    [shared.records, promptOptimizations],
+    () => persistRecords(),
+    { deep: true },
+  );
 
   // ---------- 主题 / 项目变化 ----------
   /**
@@ -239,6 +261,14 @@ export function useGenerationState(opts: {
     if (writeTimer) clearTimeout(writeTimer);
   });
 
+  /** 把一次提示词优化结果 push 进 promptOptimizations 数组。
+   * 不入 records 列表(UI 不显示);落入 records 同盘(共享 primary / fallback 路由),
+   * 与 videoGen 落盘行为统一。
+   */
+  function recordPromptOptimization(opt: PromptOptimization) {
+    promptOptimizations.value.push(opt);
+  }
+
   return {
     constraints,
     generatedCount,
@@ -246,5 +276,7 @@ export function useGenerationState(opts: {
     /** 切工程 / 手动刷新共用的加载入口：清理挂起写入 + 冻结落盘 */
     reloadRecords,
     persistRecords,
+    recordPromptOptimization,
+    promptOptimizations,
   };
 }

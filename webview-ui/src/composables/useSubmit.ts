@@ -25,6 +25,7 @@ import type {
   GenerationRecord,
   VideoRatio,
   ReferenceItem,
+  PromptOptimization,
 } from "@shared/messages";
 import type {
   VideoGenCapability,
@@ -64,6 +65,8 @@ export function useSubmit(opts: {
   inflightApi: UseSubmitInflightApi;
   /** 飞书上报回调(infligh.onTerminalSuccess / optimizePrompt 完成后调用) */
   reportToFeishu: (rec: GenerationRecord, purpose?: any) => void;
+  /** 把一次提示词优化结果 push 进持久化数组(不入 records 列表) */
+  recordPromptOptimization: (opt: PromptOptimization) => void;
 }) {
   const shared = inject(SharedRefsKey);
   if (!shared) {
@@ -475,6 +478,23 @@ if (shared.ratio.value === "adaptive") {
               REPORT_PURPOSE.PROMPT_OPT,
             );
             const optimized = resp.content?.prompt;
+            // 落盘优化结果(同盘,不入 records 列表;前端不显示)。
+            // 失败也记录(便于审计历史失败请求)。
+            opts.recordPromptOptimization({
+              originalPrompt: optimizeRec.prompt,
+              optimizedPrompt: optimized,
+              success: !!optimized,
+              provider: opts.currentProviderId.value,
+              references: optimizeRec.references,
+              createdAt: new Date().toISOString(),
+              usage: resp.usage
+                ? {
+                      total_tokens: resp.usage.total_tokens,
+                      prompt_tokens: resp.usage.prompt_tokens,
+                      completion_tokens: resp.usage.completion_tokens,
+                    }
+                  : undefined,
+            });
             if (optimized) {
               shared.prompt.value = optimized;
               opts.showToast("提示词已优化");
@@ -483,6 +503,15 @@ if (shared.ratio.value === "adaptive") {
             }
           } else if (resp.status === "failed" || resp.status === "cancelled") {
             opts.showToast(`优化失败: ${resp.error?.message || resp.status}`);
+            // 失败也落盘(便于审计)
+            opts.recordPromptOptimization({
+              originalPrompt: optimizeRec.prompt,
+              success: false,
+              provider: opts.currentProviderId.value,
+              references: optimizeRec.references,
+              createdAt: new Date().toISOString(),
+              error: resp.error?.message || resp.status,
+            });
           }
           optimizingPrompt.value = false;
         } finally {

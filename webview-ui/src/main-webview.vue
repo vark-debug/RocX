@@ -155,6 +155,7 @@ const submitApi = useSubmit({
     pollingActive: inflightApi.pollingActive as any,
   },
   reportToFeishu: feishuApi.reportToFeishu,
+  recordPromptOptimization: state.recordPromptOptimization,
 });
 
 // ---------- 导入到工程 ----------
