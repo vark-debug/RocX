@@ -178,7 +178,7 @@ export function useSubmit(opts: {
     resetCaptureContext();
     // 提交成功后 ratio=adaptive 在无 references 时不合法,自动回退到 16:9,
     // 让用户在继续输入 prompt 后「生成」按钮可立即可点。
-if (shared.ratio.value === "adaptive") {
+    if (shared.ratio.value === "adaptive") {
       shared.ratio.value = "16:9";
     }
 
@@ -505,6 +505,10 @@ if (shared.ratio.value === "adaptive") {
               provider: opts.currentProviderId.value,
               references: optimizeRec.references,
               createdAt: new Date().toISOString(),
+              // 归属:与 videoGen 同一套 CaptureContext 锁定值,落盘时按它路由,
+              // 不因完成前切了工程而写进别的工程的 JSON
+              projectGuid: optimizeRec.projectGuid,
+              projectPath: optimizeRec.projectPath,
               usage: resp.usage
                 ? {
                       total_tokens: resp.usage.total_tokens,
@@ -528,6 +532,9 @@ if (shared.ratio.value === "adaptive") {
               provider: opts.currentProviderId.value,
               references: optimizeRec.references,
               createdAt: new Date().toISOString(),
+              // 归属:与成功分支同源(见上方注释)
+              projectGuid: optimizeRec.projectGuid,
+              projectPath: optimizeRec.projectPath,
               error: resp.error?.message || resp.status,
             });
           }

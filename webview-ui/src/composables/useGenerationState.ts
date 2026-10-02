@@ -141,7 +141,16 @@ export function useGenerationState(opts: {
       // (main-webview mount + onProjectChanged 时跑)刷新,JSON 里的 storageMode 字段
       // 仍保留以便 migrate 历史数据,但不参与 UI 显示判断。
       // 提示词优化历史(不入 records,独立字段;若盘上缺省为空数组)
-      promptOptimizations.value = data.promptOptimizations ?? [];
+      // 只替换「归属当前工程」的那部分:其它工程的优化项继续留在内存,
+      // 它们各自写回自己工程的 JSON。若一并替换掉,写回时(见 persistRecords)
+      // 旧工程分组会拿到空数组,把它 JSON 里已有的优化历史覆盖掉。
+      const fromOtherProjects = promptOptimizations.value.filter(
+        (o) => (o.projectPath ?? cur.path) !== cur.path,
+      );
+      promptOptimizations.value = [
+        ...fromOtherProjects,
+        ...(data.promptOptimizations ?? []),
+      ];
       // 故障恢复：只对本工程的 generating 记录恢复轮询（resumePolling 内部有防重复判断）
       for (const rec of shared.records.value) {
         const isCur = cur.guid
@@ -177,38 +186,43 @@ export function useGenerationState(opts: {
       writeTimer = null;
       // 切工程加载期间不落盘：records 此刻是加载中间态
       if (switching.value) return;
-      // 按记录的归属工程分组：多工程并行时每组单独写一个 JSON，
-      // 否则会把所有工程的记录混进「当前活动工程」的文件里
+      // 按归属工程分组：多工程并行时每组单独写一个 JSON，
+      // 否则会把所有工程的记录混进「当前活动工程」的文件里。
+      // 优化历史与 records 同盘同路由，按各自自带的归属入组。
       const groups = new Map<
         string,
-        { projectGuid: string; projectPath: string; records: GenerationRecord[] }
+        {
+          projectGuid: string;
+          projectPath: string;
+          records: GenerationRecord[];
+          optimizations: PromptOptimization[];
+        }
       >();
       const cur = shared.projectInfo.value;
+      const ensureGroup = (guid: string, path: string) => {
+        const key = guid || path;
+        let g = groups.get(key);
+        if (!g) {
+          g = { projectGuid: guid, projectPath: path, records: [], optimizations: [] };
+          groups.set(key, g);
+        }
+        return g;
+      };
       for (const r of shared.records.value) {
         // 缺归属字段的历史记录归入当前工程（与读取时的补齐逻辑一致）
         const guid = r.projectGuid ?? cur?.guid ?? "";
         const path = r.projectPath ?? cur?.path ?? "";
         // 无路径归属：无法路由落盘，跳过
         if (!path) continue;
-        const key = guid || path;
-        if (!groups.has(key)) {
-          groups.set(key, { projectGuid: guid, projectPath: path, records: [] });
-        }
-        groups.get(key)!.records.push(r);
+        ensureGroup(guid, path).records.push(r);
       }
-      // 即使 records 为空(用户从未跑过视频生成),promptOptimizations 也要落盘:
-      // records 为空时 groups 为空,下面 for 循环不会执行,这里补一个当前工程的空 group。
-      if (
-        promptOptimizations.value.length > 0 &&
-        cur?.path &&
-        !groups.has(cur.guid || cur.path)
-      ) {
-        const key = cur.guid || cur.path;
-        groups.set(key, {
-          projectGuid: cur.guid ?? "",
-          projectPath: cur.path,
-          records: [],
-        });
+      for (const opt of promptOptimizations.value) {
+        // 优化历史同样按自身归属入组：归属在优化完成那刻已由 CaptureContext 锁定，
+        // 之后切工程不会改变它。缺归属的旧数据归入当前工程。
+        const guid = opt.projectGuid ?? cur?.guid ?? "";
+        const path = opt.projectPath ?? cur?.path ?? "";
+        if (!path) continue;
+        ensureGroup(guid, path).optimizations.push(opt);
       }
       // 逐组写入；storageMode 只回写「当前工程」那一组的状态
       console.log(
@@ -217,21 +231,22 @@ export function useGenerationState(opts: {
           guid: g.projectGuid || "-",
           path: g.projectPath,
           count: g.records.length,
+          promptOpts: g.optimizations.length,
         })),
       );
       for (const g of groups.values()) {
-        // promptOptimizations 与 records 同盘、同路由。
-        // 归属:当前工程的优化历史归入当前工程(优化任务与 videoGen 共用 CaptureContext
-        // 锁定,落盘时归属一致);切工程后旧工程的历史归属旧工程路径(由其自身 JSON 持有)。
-        const opts4thisGroup = g.projectPath === cur?.path ? promptOptimizations.value : [];
+        // promptOptimizations 与 records 同盘、同路由：
+        // 每组只写自己归属的优化历史，不会把别的工程的历史覆盖成空数组。
         const data: ProjectRecords = {
-          ...g,
+          projectGuid: g.projectGuid,
+          projectPath: g.projectPath,
+          records: g.records,
           storageMode: opts.storageMode.value,
-          promptOptimizations: opts4thisGroup,
+          promptOptimizations: g.optimizations,
         };
         const w = await bridge.recordsWrite(data);
         console.log(
-          `[gen][persist] 写入完成 path=${g.projectPath} count=${g.records.length} promptOpts=${opts4thisGroup.length} ok=${w.ok} mode=${w.storageMode ?? "-"} err=${w.error ?? "-"}`,
+          `[gen][persist] 写入完成 path=${g.projectPath} count=${g.records.length} promptOpts=${g.optimizations.length} ok=${w.ok} mode=${w.storageMode ?? "-"} err=${w.error ?? "-"}`,
         );
         // 注意:写盘后不再用 w.storageMode 覆盖 opts.storageMode —— 该 ref 由实时
         // probePrimary() 驱动(mount + onProjectChanged),保证 UI 与当前可写性一致。

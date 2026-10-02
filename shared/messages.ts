@@ -152,6 +152,14 @@ export interface PromptOptimization {
   error?: string;
   /** provider 用量;仅 UI 优化成功时上报飞书用 */
   usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
+  /**
+   * 归属工程的 guid:落盘路由依据。
+   * 优化与生成共用 CaptureContext 锁定值,所以归属在优化完成那一刻就已确定,
+   * 不受后续切工程影响(与 GenerationRecord.projectGuid 同义)。
+   */
+  projectGuid?: string;
+  /** 归属工程的绝对路径:落盘路由依据(缺失时回落到当前活动工程,兼容旧数据) */
+  projectPath?: string;
 }
 
 export interface ProjectRecords {
