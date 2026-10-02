@@ -17,7 +17,7 @@
 import { ref, inject } from "vue";
 import { bridge } from "../services/bridge";
 import { MiniMaxProvider } from "../providers/minimax";
-import { getCaptureContext, resetCaptureContext } from "./useCaptureContext";
+import { getCaptureContext, lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import { safeProviderCall } from "./useProviderSafe";
 import { SharedRefsKey } from "../providers/state";
 import { REPORT_PURPOSE } from "@shared/messages";
@@ -387,6 +387,24 @@ if (shared.ratio.value === "adaptive") {
     if (pollingActive.value) {
       opts.showToast("有视频生成正在轮询，请稍候再试");
       return;
+    }
+
+    // 与 videoGen 落盘路径完全一致:optimizePrompt 第一次调用时主动锁定
+    // 当前活动工程到 CaptureContext(first-write-wins,已锁定则跳过),避免后续切工程
+    // 导致归属漂移。videoGen 在 captureXxx 时已 lock,optimizePrompt 没那个入口,
+    // 这里补上。锁定源标 \"live\"(与 captureXxx 的 \"capture\" 区分,便于 UI 提示)。
+    if (!getCaptureContext()) {
+      const live = await bridge.queryProjectState();
+      if (live.project?.path) {
+        lockCaptureContext(
+          {
+            projectGuid: live.project.guid,
+            projectPath: live.project.path,
+            projectName: live.project.name,
+          },
+          "live",
+        );
+      }
     }
 
     // 仅取已上传成功的 references(有 fileId 的)
