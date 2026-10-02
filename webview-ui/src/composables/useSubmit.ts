@@ -395,10 +395,14 @@ if (shared.ratio.value === "adaptive") {
         : shared.ratio.value;
 
     optimizingPrompt.value = true;
-    // 优化请求是异步任务(h3_context_ir):用一个临时 record 占位,
-    // 让 polling_ 的状态机正常运转;完成后把 prompt.content 写回 UI。
+    // 优化请求是异步任务(h3_context_ir):polling 期间用 inflight 登记,
+    // 不入 records 数组 —— 与 videoGen 行为一致,optimize 完成也不入历史。
+    // 飞书上报直接用 record 副本(原 optimizeRec),无需入盘。
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    // 归属来源与 submitGenerate 一致:抓素材时锁定的 CaptureContext 优先,否则实时活动工程。
+    // 这之前直接 shared.projectInfo.value?.path 在多工程 + 切工程场景下会错位。
+    const owner = await resolveSubmitOwner();
     const optimizeRec: GenerationRecord = {
       id,
       createdAt: now,
@@ -413,9 +417,9 @@ if (shared.ratio.value === "adaptive") {
       references: [...validRefs],
       status: "pending",
       submittedAt: now,
-      // 归属标记:占位 record 同样带上,落盘按归属路由
-      projectGuid: shared.projectInfo.value?.guid,
-      projectPath: shared.projectInfo.value?.path,
+      // 归属标记:与 videoGenerate 一致走 CaptureContext / 实时活动工程
+      projectGuid: owner?.guid,
+      projectPath: owner?.path,
     };
 
     const mini = new MiniMaxProvider();
@@ -435,14 +439,14 @@ if (shared.ratio.value === "adaptive") {
       return;
     }
     const task_id = r.data.taskId;
-    // 占位 record 写入 records,便于统一走 polling 流;status 始终为 'generating'
+    // 不再 unshift 到 shared.records,避免触发 persistRecords 落盘;
+    // 优化任务完成后只用 splice 删占位(已优化老表单也无需记录)。
+    // inflight 登记仍保留,pollingActive / generating 派生信号源。
     const optimizeRunRec: GenerationRecord = {
       ...optimizeRec,
       taskId: task_id,
       status: "generating",
     };
-    shared.records.value.unshift(optimizeRunRec);
-    // 登记进在飞任务表(generating / pollingActive 由它派生)
     inflight.set(id, { record: optimizeRunRec, polling: true });
     polling_.start({
       taskId: task_id,
@@ -454,11 +458,6 @@ if (shared.ratio.value === "adaptive") {
       onTerminal: (resp, err) => {
         // 所有分支(含提前 return)都要把该 id 从在飞表摘除
         try {
-          const idx = shared.records.value.findIndex((r) => r.id === id);
-          if (idx >= 0) {
-            // 删除占位 record(用户不需要在历史里看到一条"优化任务")
-            shared.records.value.splice(idx, 1);
-          }
           if (err) {
             console.error("[webview] optimizePrompt poll error:", err);
             opts.showToast(`优化失败: ${err.message || err}`);
