@@ -139,10 +139,23 @@ const inflightApi = useInflight({
   onTerminalSuccess: feishuApi.reportToFeishu,
 });
 
-// ---------- 提交 / 升级 / 优化提示词(消费 inflightApi) ----------
+// ---------- 全局状态（依赖 inflightApi.resumePolling 做故障恢复） ----------
+// useGenerationState 内部通过 inject 拿 10 个高频 ref;
+// 只暴露 storageMode(不入 SharedRefs) + resumePolling/getInflightRecords +
+// recordPromptOptimization(optimizePrompt 落盘写入)
+// ⚠ 必须在 useSubmit 之前声明 —— useSubmit 入参里要引用 state.recordPromptOptimization,
+// const 没 hoisting,提前访问会 TDZ。
+const state = useGenerationState({
+  storageMode,
+  resumePolling: inflightApi.resumePolling,
+  getInflightRecords: inflightApi.getInflightRecords,
+});
+
+// ---------- 提交 / 升级 / 优化提示词(消费 inflightApi / state) ----------
 // useSubmit 内部通过 inject 拿 9 个高频 ref;只暴露
 // currentProviderId(plan V5 决定不入 SharedRefs) +
-// findModelDescriptor / showToast / inflightApi / reportToFeishu
+// findModelDescriptor / showToast / inflightApi / reportToFeishu +
+// recordPromptOptimization(提示词优化结果落盘回调)
 const submitApi = useSubmit({
   currentProviderId,
   findModelDescriptor,
@@ -167,15 +180,6 @@ const importApi = useImport({
 // ---------- 重试 / 删除记录 ----------
 // useRecordEdit 无入参,所有状态通过 inject 拿
 const recordEditApi = useRecordEdit();
-
-// ---------- 全局状态（依赖 inflightApi.resumePolling 做故障恢复） ----------
-// useGenerationState 内部通过 inject 拿 10 个高频 ref;
-// 只暴露 storageMode(不入 SharedRefs) + resumePolling/getInflightRecords
-const state = useGenerationState({
-  storageMode,
-  resumePolling: inflightApi.resumePolling,
-  getInflightRecords: inflightApi.getInflightRecords,
-});
 
 // ---------- 参考素材（依赖 state.constraints 做智能填写） ----------
 // useReferences 暂时保持 props 透传(规划 v3 下一期处理;
