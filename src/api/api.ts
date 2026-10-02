@@ -52,6 +52,14 @@ export const api = {
   async recordsRead(target?: { projectGuid?: string; projectPath?: string }) {
     return await recordsCore.read(target);
   },
+  /**
+   * 实时探针:试写一个 .ai-gen-probe.json,返回当前活动工程 primary 路径实际可写性。
+   * webview 端在 mount / onProjectChanged 时调一次,更新 ⚠ 降级 storage 提示。
+   */
+  async probePrimary(target?: { projectPath?: string }) {
+    return recordsCore.probePrimary(target);
+  },
+
   async recordsWrite(data: any) {
     return await recordsCore.write(data);
   },

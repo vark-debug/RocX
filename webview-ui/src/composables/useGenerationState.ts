@@ -129,7 +129,9 @@ export function useGenerationState(opts: {
         return rec.projectPath !== cur.path;
       });
       shared.records.value = [...fromDisk, ...keepInflight];
-      opts.storageMode.value = data.storageMode;
+      // 注意:不再覆盖 opts.storageMode —— 现在 storageMode 靠实时 probePrimary()
+      // (main-webview mount + onProjectChanged 时跑)刷新,JSON 里的 storageMode 字段
+      // 仍保留以便 migrate 历史数据,但不参与 UI 显示判断。
       // 故障恢复：只对本工程的 generating 记录恢复轮询（resumePolling 内部有防重复判断）
       for (const rec of shared.records.value) {
         const isCur = cur.guid
@@ -199,7 +201,8 @@ export function useGenerationState(opts: {
         console.log(
           `[gen][persist] 写入完成 path=${g.projectPath} count=${g.records.length} ok=${w.ok} mode=${w.storageMode ?? "-"} err=${w.error ?? "-"}`,
         );
-        if (w.ok && g.projectPath === cur?.path) opts.storageMode.value = w.storageMode;
+        // 注意:写盘后不再用 w.storageMode 覆盖 opts.storageMode —— 该 ref 由实时
+        // probePrimary() 驱动(mount + onProjectChanged),保证 UI 与当前可写性一致。
       }
     }, 200);
   }

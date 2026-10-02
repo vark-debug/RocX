@@ -173,7 +173,67 @@ async function readFallback(
   }
 }
 
+/**
+ * 实时探针:试在 primary 路径下 createEntry + write + delete 一个临时小文件,
+ * 确认当前 primary 路径实际可写。fallback(降级)路径不影响此判断。
+ *
+ * 用法:webview 端 onMounted / onProjectChanged 时调一次,刷新 storageMode 提示。
+ * 比读盘 JSON 的 storageMode 更准确(不受历史残留影响)。
+ */
+async function probePrimaryForProject(
+  projectPath: string,
+): Promise<{ primaryAvailable: boolean; error?: string }> {
+  if (!projectPath) return { primaryAvailable: false };
+  try {
+    const fs = getFs();
+    const { dir } = splitProjectPath(projectPath);
+    const sep = /\\/.test(projectPath) && !/\//.test(projectPath) ? "\\" : "/";
+    // 探针文件名:仅占位(空 {} ),后缀 .probe 避免与真实记录冲突
+    const probeName = ".ai-gen-probe.json";
+    const probeUrl = pathToFileUrl(
+      (dir ? dir + sep : sep) + probeName,
+    );
+    let entry: any;
+    try {
+      entry = await fs.createEntryWithUrl(probeUrl, { overwrite: true });
+    } catch (e) {
+      return { primaryAvailable: false, error: String((e as any)?.message || e) };
+    }
+    try {
+      await entry.write("{}");
+    } catch (e) {
+      try { await entry.delete(); } catch {}
+      return { primaryAvailable: false, error: String((e as any)?.message || e) };
+    }
+    try {
+      await entry.delete();
+    } catch {}
+    return { primaryAvailable: true };
+  } catch (e: any) {
+    return { primaryAvailable: false, error: String(e?.message || e) };
+  }
+}
+
 export const recordsCore = {
+  /**
+   * 实时探针:试在当前活动工程的 primary 路径下写一个临时小文件,
+   * 返回当前 primary 路径实际可写性。
+   * - primaryAvailable=true → storageMode 视为 "primary"
+   * - primaryAvailable=false → storageMode 视为 "fallback"(⚠ 显示)
+   */
+  async probePrimary(target?: { projectPath?: string }): Promise<{
+    ok: boolean;
+    primaryAvailable: boolean;
+    error?: string;
+  }> {
+    const live = await projectCore.getCurrent();
+    const projectPath = target?.projectPath || live?.path || "";
+    if (!projectPath) {
+      return { ok: false, primaryAvailable: false, error: "无活动项目" };
+    }
+    const r = await probePrimaryForProject(projectPath);
+    return { ok: true, primaryAvailable: r.primaryAvailable, error: r.error };
+  },
   /**
    * 读取记录。
    * @param target 指定要读哪个工程。缺省读「实时活动工程」。

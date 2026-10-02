@@ -279,6 +279,16 @@ export interface UxptoWebviewAPI {
     storageMode: "primary" | "fallback";
   }>;
 
+  /**
+   * 实时探针:试在 primary 路径下写一个临时 .ai-gen-probe.json,返回当前
+   * primary 路径实际可写性。webview 端 mount / onProjectChanged 时调一次刷新 ⚠ 提示。
+   */
+  probePrimary(target?: { projectPath?: string }): Promise<{
+    ok: boolean;
+    primaryAvailable: boolean;
+    error?: string;
+  }>;
+
   /** 弹 FilePicker，选文件 → 校验 → 调用 MiniMax upload */
   pickAndUploadReference(args: { kind: FileKind; providerId?: string }): Promise<{
     ok: boolean;

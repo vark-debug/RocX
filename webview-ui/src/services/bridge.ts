@@ -22,6 +22,7 @@ export const bridge = {
   recordsRead: (target?: { projectGuid?: string; projectPath?: string }) =>
     ensure().recordsRead(target),
   recordsWrite: (data: ProjectRecords) => ensure().recordsWrite(data),
+  probePrimary: (target?: { projectPath?: string }) => ensure().probePrimary(target),
   pickAndUploadReference: (kind: FileKind) =>
     ensure().pickAndUploadReference({ kind }),
   reuploadReference: (args: any) => ensure().reuploadReference(args),

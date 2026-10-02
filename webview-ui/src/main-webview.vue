@@ -198,6 +198,24 @@ const canSubmit = computed(() => {
   return true;
 });
 
+// ---------- 实时探针:storageMode 不存盘提示,改为 mount + 切工程时跑 probePrimary ----------
+// 之前用盘上 JSON 的 storageMode 字段,一旦历史上写失败一次就永久误报。
+// 现在每次显示前(启动 + 切工程)实际试写一次 primary 路径。
+async function refreshStorageProbe(target?: { projectPath?: string }) {
+  try {
+    const r = await bridge.probePrimary(target);
+    if (r.ok) storageMode.value = r.primaryAvailable ? "primary" : "fallback";
+  } catch {
+    // 探针失败不更新;上一次结果仍然显示。避免单次网络抖动导致 ⚠ 闪烁消失。
+  }
+}
+
+// 切工程事件订阅:onProjectChanged 信号一来就 probe(用上一次 projectInfo,
+// 因为 loadRecords 才拿到最新值前事件可能先到)
+webviewAPI.onProjectChanged((p) => {
+  void refreshStorageProbe(p ? { projectPath: p.path } : undefined);
+});
+
 // ---------- 初始化 ----------
 onMounted(async () => {
   // 默认注册 MiniMax（dynamic import 走 registry）
@@ -212,6 +230,11 @@ onMounted(async () => {
   if (pi.project) {
     projectInfo.value = pi.project;
     await state.reloadRecords();
+    // mount 完成 + 项目信息就位时,刷新 ▷ 补的状态
+    await refreshStorageProbe({ projectPath: pi.project.path });
+  } else {
+    // 无活动工程,探针意义不大,但仍跑一次以避免切工程之前看起来 stale
+    await refreshStorageProbe();
   }
 });
 
