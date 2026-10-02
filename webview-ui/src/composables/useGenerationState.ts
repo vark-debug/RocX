@@ -196,6 +196,20 @@ export function useGenerationState(opts: {
         }
         groups.get(key)!.records.push(r);
       }
+      // 即使 records 为空(用户从未跑过视频生成),promptOptimizations 也要落盘:
+      // records 为空时 groups 为空,下面 for 循环不会执行,这里补一个当前工程的空 group。
+      if (
+        promptOptimizations.value.length > 0 &&
+        cur?.path &&
+        !groups.has(cur.guid || cur.path)
+      ) {
+        const key = cur.guid || cur.path;
+        groups.set(key, {
+          projectGuid: cur.guid ?? "",
+          projectPath: cur.path,
+          records: [],
+        });
+      }
       // 逐组写入；storageMode 只回写「当前工程」那一组的状态
       console.log(
         `[gen][persist] 分组数=${groups.size} currentGuid=${cur?.guid ?? "-"} currentPath=${cur?.path ?? "-"}`,
