@@ -336,15 +336,24 @@ export const recordsCore = {
     const targetName = splitProjectPath(targetPath).base;
 
     // 写盘前剥离 thumbDataUrl（base64 data URL 会让 JSON 膨胀到几 MB，
-    // 视频缩略图在 webview 端按需通过 readAsDataUrl(workFile) 重新读取）
+    // 视频缩略图在 webview 端按需通过 readAsDataUrl(workFile) 重新读取）。
+    // 注意:不仅 records.references 需要剥离,promptOptimizations 数组内的
+    // references 也必须同样处理 —— 否则 base64 进 JSON 会让 payload 过大,
+    // tryWriteToPrimary 失败,自动 fallback 到 plugin-data 路径。
+    const sanitizeRefs = (refs: any[]) =>
+      refs.map((ref) => {
+        const { thumbDataUrl: _omit, ...rest } = ref as any;
+        return rest;
+      });
     const sanitized: ProjectRecords = {
       ...data,
       records: data.records.map((r) => ({
         ...r,
-        references: r.references.map((ref) => {
-          const { thumbDataUrl: _omit, ...rest } = ref as any;
-          return rest;
-        }),
+        references: sanitizeRefs(r.references),
+      })),
+      promptOptimizations: (data.promptOptimizations ?? []).map((opt) => ({
+        ...opt,
+        references: sanitizeRefs(opt.references),
       })),
     };
 
