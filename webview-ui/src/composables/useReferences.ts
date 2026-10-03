@@ -30,6 +30,13 @@ export function useReferences(opts: {
   /** 顶层 model 的当前值（用于按 provider 中性查找合法 ratio 列表） */
   getModelId: () => string;
   currentProviderId: Ref<string>;
+  /**
+   * 素材上传目标 provider id（由调用方按当前生成模式分流：
+   * video 模式 → 视频 provider；image 模式 → 图片 provider）。
+   * 所有上传入口（选文件 / 抓帧 / 抓视频 / PS 完成 / 用作参考）统一走这里，
+   * 防止图片模式下素材被误传到视频平台。
+   */
+  resolveUploadProviderId: () => string;
   /** 查找 model descriptor（用于按 provider 中性查找合法 ratio 列表） */
   findModelDescriptor: (modelId: string, providerId?: string) => ModelDescriptor | null;
   /** toast */
@@ -37,8 +44,15 @@ export function useReferences(opts: {
 }) {
   // ---------- 增删 ----------
   async function addReference(kind: FileKind) {
-    const r = await bridge.pickAndUploadReference(kind);
+    // 上传目标取一次快照：选择文件期间切模式不应导致标记与实际目标不一致
+    const uploadPid = opts.resolveUploadProviderId();
+    const r = await bridge.pickAndUploadReference({
+      kind,
+      // 素材上传到当前生成模式对应 provider（fileId 与 provider 绑定）
+      providerId: uploadPid,
+    });
     if (r.ok && r.reference) {
+      r.reference.uploadProvider = uploadPid;
       // 校验总数上限
       const v = opts.references.value.filter((x) => x.type === "reference_video").length;
       const i = opts.references.value.filter((x) => x.type === "reference_image").length;
@@ -70,12 +84,15 @@ export function useReferences(opts: {
       opts.showToast("无法识别文件类型");
       return;
     }
+    const uploadPid = opts.resolveUploadProviderId();
     const r = await bridge.uploadExistingFileAsReference({
       localPath: rec.workFile,
       fileName: rec.workFile.split("/").pop() || "ref.bin",
       kind,
+      providerId: uploadPid,
     });
     if (r.ok && r.reference) {
+      r.reference.uploadProvider = uploadPid;
       opts.references.value.push(r.reference);
     } else {
       opts.showToast(`上传失败: ${r.error}`);
@@ -136,10 +153,13 @@ export function useReferences(opts: {
   function uploadInBackground(): void {
     const refToUpdate = opts.references.value[opts.references.value.length - 1];
     refToUpdate.uploading = true;
+    // 上传目标取一次快照：异步上传期间切模式不应导致标记与实际目标不一致
+    const uploadPid = opts.resolveUploadProviderId();
     bridge
       .uploadReferenceFile({
         filePath: refToUpdate.localPath,
         fileName: refToUpdate.fileName,
+        providerId: uploadPid,
       })
       .then((up) => {
         const idx = opts.references.value.findIndex((x) => x === refToUpdate);
@@ -151,6 +171,7 @@ export function useReferences(opts: {
           return;
         }
         refToUpdate.fileId = up.fileId;
+        refToUpdate.uploadProvider = uploadPid;
         refToUpdate.uploadedAt = up.uploadedAt;
         refToUpdate.uploading = false;
       })
@@ -195,7 +216,7 @@ export function useReferences(opts: {
   /**
    * 抓帧 + 用系统关联打开 Photoshop，UI 显示「✏ PS 中 · 修改完成」按钮。
    * 与 captureFrameAsReference 的关键区别：push 到 references 时打 pendingUpload=true，
-   * **不**调 uploadInBackground；只有用户在面板点「修改完成」后才上传到 MiniMax。
+   * **不**调 uploadInBackground；只有用户在面板点「修改完成」后才上传到目标 provider。
    * references 数组本身不持久化，刷新/重载/webview reload 会自动丢 pendingUpload 状态，
    * 杜绝「刷新错传之前缓存的图片」。
    */
@@ -256,12 +277,16 @@ export function useReferences(opts: {
     if (ref.uploading) return; // 防重复点
     ref.uploading = true;
     try {
+      // 上传目标快照（与 uploadInBackground 同语义）
+      const uploadPid = opts.resolveUploadProviderId();
       const up = await bridge.uploadReferenceFile({
         filePath: ref.localPath,
         fileName: ref.fileName,
+        providerId: uploadPid,
       });
       if (up.ok && up.fileId) {
         ref.fileId = up.fileId;
+        ref.uploadProvider = uploadPid;
         ref.uploadedAt = up.uploadedAt;
         ref.uploading = false;
         ref.pendingUpload = false;

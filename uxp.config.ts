@@ -114,6 +114,8 @@ const manifest: UXP_Manifest = {
         "https://cdn.hailuoai.com",
         // MiniMax 生成结果 CDN（用户报告实际响应域名）
         "https://algeng-video-infer.oss-cn-shanghai.aliyuncs.com",
+        // RunningHub 图片 provider：上传 / 创建 / 查询 API（host 侧 binary 上传 + webview 侧 fetch 共用）
+        "https://www.runninghub.cn",
         // 飞书多维表格自动化 webhook（租户级子域名，如 xxx.feishu.cn，必须通配）
         "https://*.feishu.cn",
         // 钉钉连接器 webhook（测试用）
@@ -138,6 +140,8 @@ const manifest: UXP_Manifest = {
         "https://api.minimax.cn",
         "https://cdn.hailuoai.com",
         "https://algeng-video-infer.oss-cn-shanghai.aliyuncs.com",
+        // RunningHub 图片 provider：webview 侧 createImage / queryTask fetch
+        "https://www.runninghub.cn",
       ],
       enableMessageBridge: "localAndRemote",
     },

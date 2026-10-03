@@ -24,13 +24,19 @@ import type { GenerationRecord, ReferenceItem } from "@shared/messages";
 const REF_FILE_ID_TTL_MS = 6 * 24 * 3600 * 1000;
 
 export function useRecordEdit() {
-  const shared = inject(SharedRefsKey);
-  if (!shared) {
+  const sharedRaw = inject(SharedRefsKey);
+  if (!sharedRaw) {
     throw new Error("useRecordEdit requires SharedRefs provider in main-webview");
   }
+  // 窄化别名：const 初始化取 rvalue 的窄化类型，闭包内不再 possibly undefined
+  const shared = sharedRaw;
 
   /** 重试:把 prompt / params / references 全部填回生成逻辑 UI */
   async function retryRecord(rec: GenerationRecord) {
+    if (rec.kind === "image") {
+      // 图片记录的参数与视频 UI 不同,重试回填留待图片提交链路完善
+      return;
+    }
     if (!shared.apiKey.value) return;
     const idx = shared.records.value.findIndex((r) => r.id === rec.id);
     if (idx < 0) return;
@@ -53,12 +59,15 @@ export function useRecordEdit() {
               type: ref.type,
               localPath: ref.localPath,
               fileName: ref.fileName,
+              // 重传回原记录锁定的 provider（fileId 与 provider 绑定）
+              providerId: rec.params.provider,
             });
             if (r.ok && r.fileId) {
               refreshed.push({
                 ...ref,
                 fileId: r.fileId,
                 uploadedAt: new Date().toISOString(),
+                uploadProvider: rec.params.provider,
               });
             } else {
               refreshed.push(ref);

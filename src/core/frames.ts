@@ -174,10 +174,11 @@ export const framesCore = {
    * 实际实现见 captureBase.uploadReferenceFile;
    * 这里 re-export 是为了 framesCore.uploadReferenceFile 公开签名不变。
    */
-  async uploadReferenceFile(args: { filePath: string; fileName: string }) {
+  async uploadReferenceFile(args: { filePath: string; fileName: string; providerId?: string }) {
     return uploadReferenceFile({
       filePath: args.filePath,
       fileName: args.fileName,
+      providerId: args.providerId,
       // frames 的历史素材兜底:同时检查 sourceFolderToken + exportFolderToken
       fallbackTokenKeys: ["MiniMax.sourceFolderToken", "MiniMax.exportFolderToken"],
     });
@@ -189,6 +190,8 @@ export const framesCore = {
   async captureAndUploadAsReference(opts: {
     width?: number;
     height?: number;
+    /** 目标 provider id；缺省回落默认 provider */
+    providerId?: string;
   } = {}): Promise<{
     ok: boolean;
     reference?: ReferenceItem & { thumbDataUrl?: string };
@@ -292,15 +295,16 @@ export const framesCore = {
         console.warn("[frames] read frame as data URL failed", e);
       }
 
-      // 上传到 MiniMax（API Key 在 UXP 端读取 secureStorage）
-      const apiKey = await storage.getApiKey();
+      // 上传到目标 provider（API Key 在 UXP 端读取 secureStorage）
+      const apiKey = await storage.getApiKey(opts.providerId);
       if (!apiKey) {
-        return { ok: false, error: "未配置 MiniMax API Key" };
+        return { ok: false, error: "未配置 API Key" };
       }
       const up = await uploadCore.uploadFile({
         apiKey,
         fileToken: actualFile, // 直接用 token 传，避免再调 getFileByPath
         fileName: actualName,
+        providerId: opts.providerId,
       });
       console.log("[frames] upload result:", { ok: up.ok, fileId: up.fileId, error: up.error });
       if (!up.ok || !up.fileId) {

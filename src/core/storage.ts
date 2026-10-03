@@ -6,12 +6,15 @@
  * 旧明文 app-settings.json 会在首次读取时自动迁移到 secureStorage。
  */
 import { uxp } from "../globals";
+import { DEFAULT_UXP_PROVIDER_ID } from "./ai/providers/types";
 
 const SETTINGS_FILENAME = "app-settings.json";
 const SETTINGS_FALLBACK_FILENAME = "app-settings.sec.json";
 
 interface PersistedSettings {
   apiKey?: string;
+  /** per-provider API Key 表（key = providerId）；旧单 key 仍作为默认 provider 兜底 */
+  apiKeys?: Record<string, string>;
   dryRun?: boolean;
   /** 飞书多维表格自动化 webhook 地址 */
   feishuWebhookUrl?: string;
@@ -22,6 +25,8 @@ interface PersistedSettings {
 }
 
 const SECURE_KEY = "rocx.apiKey";
+/** per-provider key 表整体作为一个 JSON blob 存 secureStorage（读时无需枚举 provider 列表） */
+const SECURE_API_KEYS_KEY = "rocx.apiKeys";
 const SECURE_FEISHU_TOKEN_KEY = "rocx.feishu.token";
 
 /** 飞书团队设置（对外读写结构） */
@@ -212,6 +217,19 @@ async function readSettings(): Promise<PersistedSettings> {
     }
     const feishuToken = await secureGet(SECURE_FEISHU_TOKEN_KEY);
     if (feishuToken) merged.feishuToken = feishuToken;
+    const apiKeysRaw = await secureGet(SECURE_API_KEYS_KEY);
+    if (apiKeysRaw) {
+      try {
+        const map = JSON.parse(apiKeysRaw);
+        if (map && typeof map === "object") merged.apiKeys = map;
+      } catch {
+        // blob 损坏时忽略，回落兜底文件 / 旧单 key
+      }
+    } else if (fb.apiKeys) {
+      // 自动迁移兜底文件里的 apiKeys 到 secureStorage
+      const ok = await secureSet(SECURE_API_KEYS_KEY, JSON.stringify(fb.apiKeys));
+      if (ok) console.warn("[storage] apiKeys 已迁移到 secureStorage");
+    }
   } catch (e) {
     console.warn("[storage] secureStorage read failed, fallback:", e);
   }
@@ -235,22 +253,55 @@ async function writeSettings(settings: PersistedSettings): Promise<void> {
   } else {
     await secureDelete(SECURE_FEISHU_TOKEN_KEY);
   }
+  if (settings.apiKeys && Object.keys(settings.apiKeys).length > 0) {
+    await secureSet(SECURE_API_KEYS_KEY, JSON.stringify(settings.apiKeys));
+  } else {
+    await secureDelete(SECURE_API_KEYS_KEY);
+  }
 }
 
 export const storage = {
-  async getApiKey(): Promise<string | null> {
+  /**
+   * 取 provider 的 API Key。
+   * - 不传 providerId：返回旧单 key（兼容既有调用方）
+   * - 传 providerId：优先 apiKeys[providerId]；缺省时默认 provider 回落旧单 key
+   *   （老用户只配过一个 key，它就是默认 provider 的 key），其它 provider 返回 null
+   */
+  async getApiKey(providerId?: string): Promise<string | null> {
     const s = await readSettings();
+    if (providerId) {
+      const k = s.apiKeys?.[providerId];
+      if (k) return k;
+      if (providerId === DEFAULT_UXP_PROVIDER_ID) return s.apiKey || null;
+      return null;
+    }
     return s.apiKey || null;
   },
 
-  async setApiKey(key: string): Promise<{ ok: boolean; error?: string }> {
+  /**
+   * 写 provider 的 API Key。
+   * - 不传 providerId：写旧单 key，并同步进 apiKeys[默认 provider]（两处保持一致）
+   * - 传 providerId：只写 apiKeys[providerId]
+   */
+  async setApiKey(
+    key: string,
+    providerId?: string,
+  ): Promise<{ ok: boolean; error?: string }> {
     try {
       const trimmed = (key || "").trim();
       const s = await readSettings();
-      if (trimmed) {
-        s.apiKey = trimmed;
+      if (!providerId) {
+        if (trimmed) {
+          s.apiKey = trimmed;
+          s.apiKeys = { ...(s.apiKeys || {}), [DEFAULT_UXP_PROVIDER_ID]: trimmed };
+        } else {
+          delete s.apiKey;
+          if (s.apiKeys) delete s.apiKeys[DEFAULT_UXP_PROVIDER_ID];
+        }
       } else {
-        delete s.apiKey;
+        s.apiKeys = { ...(s.apiKeys || {}) };
+        if (trimmed) s.apiKeys[providerId] = trimmed;
+        else delete s.apiKeys[providerId];
       }
       await writeSettings(s);
       return { ok: true };

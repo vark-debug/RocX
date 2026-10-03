@@ -6,16 +6,25 @@
  * - 状态变化通过回调通知；终态（succeeded/failed/cancelled）或连续失败 6 次后结束该任务
  */
 import { computed, onBeforeUnmount, shallowReactive } from "vue";
-import { MiniMaxProvider } from "../providers/minimax";
+import { getProvider, getImageProvider } from "../providers/core/registry";
+import type { VideoGenProvider } from "../providers/core/VideoGenProvider";
+import type { ImageGenProvider } from "../providers/core/ImageGenProvider";
 import type { VideoGenQueryResponse } from "../providers/core/types";
 
 export interface PollingOpts {
   taskId: string;
+  /** 该任务提交时锁定的 provider id（轮询期间不跟随 UI 当前选择） */
+  providerId: string;
+  /** provider 表类型：video（默认）走视频注册表，image 走图片注册表 */
+  providerKind?: "video" | "image";
   apiKey: string;
   intervalMs?: number;
   onUpdate: (resp: VideoGenQueryResponse) => void;
   onTerminal: (resp: VideoGenQueryResponse | null, error?: Error) => void;
 }
+
+/** 可轮询 provider（VideoGenProvider / ImageGenProvider 均满足） */
+type PollableProvider = VideoGenProvider | ImageGenProvider;
 
 const POLL_INTERVAL = 5000;
 const MAX_BACKOFF = 60000;
@@ -28,6 +37,8 @@ interface PollerState {
   interval: number;
   /** 连续失败次数 */
   consecutiveError: number;
+  /** start 时解析并锁定的 provider 实例（整个轮询生命周期复用） */
+  provider: PollableProvider;
 }
 
 export function usePolling() {
@@ -57,6 +68,21 @@ export function usePolling() {
   }
 
   async function start(opts: PollingOpts) {
+    // 先解析并锁定提交时的 provider：整个轮询生命周期复用同一实例，
+    // 不跟随 UI 当前选择（否则「提交 A → 切到 B」后轮询会打错 provider）。
+    // providerKind=image 走图片注册表（如 RunningHub），与视频注册表互不干扰。
+    const provider: PollableProvider | null =
+      opts.providerKind === "image"
+        ? await getImageProvider(opts.providerId)
+        : await getProvider(opts.providerId);
+    if (!provider) {
+      opts.onTerminal(
+        null,
+        new Error(`provider "${opts.providerId}" 未注册，无法轮询任务`),
+      );
+      return;
+    }
+
     // 同任务重复 start：只重启它自己，不动其它任务
     stopOne(opts.taskId);
 
@@ -65,15 +91,15 @@ export function usePolling() {
       stopped: false,
       interval: opts.intervalMs ?? POLL_INTERVAL,
       consecutiveError: 0,
+      provider,
     };
     pollers.set(opts.taskId, state);
 
     const tick = async () => {
       // 只认自己的 state：既防被 stopOne 掐断，也防同 taskId 重新 start 后旧 tick 复活
       if (state.stopped || pollers.get(opts.taskId) !== state) return;
-      const api = new MiniMaxProvider();
       try {
-        const resp = await api.queryTask(opts.taskId, opts.apiKey);
+        const resp = await state.provider.queryTask(opts.taskId, opts.apiKey);
         state.consecutiveError = 0;
         state.interval = opts.intervalMs ?? POLL_INTERVAL;
         opts.onUpdate(resp);

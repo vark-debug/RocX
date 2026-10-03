@@ -244,6 +244,8 @@ export function useRecordPreview(
 
   function thumbModeOf(rec: GenerationRecord): "image" | "video" | "placeholder" {
     if (rec.status !== "generated" && rec.status !== "imported") return "placeholder";
+    // 图片记录：直接用 provider 返回的 resultUrl，无需 canvas 抽帧
+    if (rec.kind === "image") return rec.resultUrl ? "image" : "placeholder";
     if (canvasThumbCache.value[rec.id]) return "image";
     if (thumbUrlOf(rec)) return "video";
     return "placeholder";

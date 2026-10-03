@@ -11,6 +11,7 @@ import { useReferences } from "./composables/useReferences";
 import { useInflight } from "./composables/useInflight";
 import { useFeishuReport } from "./composables/useFeishuReport";
 import { useSubmit } from "./composables/useSubmit";
+import { useImageSubmit } from "./composables/useImageSubmit";
 import { useImport } from "./composables/useImport";
 import { useRecordEdit } from "./composables/useRecordEdit";
 
@@ -20,9 +21,13 @@ import {
   getProvider,
   getProviderSync,
   listProviders,
+  registerImageProvider,
+  getImageProviderSync,
   DEFAULT_PROVIDER_ID,
+  DEFAULT_IMAGE_PROVIDER_ID,
 } from "./providers/core/registry";
 import { minimaxProvider } from "./providers/minimax";
+import { runningHubProvider } from "./providers/runninghub";
 import type { ModelDescriptor } from "./providers/core/types";
 import type { VideoGenProvider } from "./providers/core/VideoGenProvider";
 
@@ -38,6 +43,10 @@ import PromptInput from "./components/PromptInput.vue";
 import ReferenceList from "./components/ReferenceList.vue";
 import RecordsPanel from "./components/RecordsPanel.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
+import ModeTabs from "./components/ModeTabs.vue";
+import type { GenerationMode } from "./components/ModeTabs.vue";
+import ImagePromptInput from "./components/ImagePromptInput.vue";
+import type { ImageRatio, ImageSize } from "./components/ImagePromptInput.vue";
 
 const { api } = initWebview(webviewAPI);
 setBridge(api);
@@ -89,6 +98,16 @@ const resolution = ref<VideoResolution>("768P");
 const references = ref<ReferenceItem[]>([]);
 const settingsOpen = ref(false);
 const selectedRecordId = ref<string | null>(null);
+/** 生成模式（视频/图片）书签切换；首版仅前端 UI，图片模式为占位 */
+const generationMode = ref<GenerationMode>("video");
+// ---- 图片生成模式状态（阶段 2A：RunningHub 文生图） ----
+const imagePrompt = ref("");
+const imageModel = ref("seedream-v5-pro");
+const imageRatio = ref<ImageRatio>("1:1");
+const imageSize = ref<ImageSize>("1K");
+/** 图片 provider 实例（mount 时注册后取用） */
+const currentImageProvider = ref<import("./providers/core/ImageGenProvider").ImageGenProvider | null>(null);
+const imageModels = computed<ModelDescriptor[]>(() => currentImageProvider.value?.models ?? []);
 
 // ---------- provide: 共享 refs 给 composables(V5.2) ----------
 // 10 个高频 ref 集中暴露给 useGenerationState / useSubmit / useImport 等
@@ -171,6 +190,20 @@ const submitApi = useSubmit({
   recordPromptOptimization: state.recordPromptOptimization,
 });
 
+// ---------- 图片生成提交（阶段 2A：RunningHub 文生图） ----------
+// 复用 useSubmit 的归属解析与 inflight/polling 单例;key 按 runninghub per-provider 读取
+const imageSubmitApi = useImageSubmit({
+  imageModel,
+  imagePrompt,
+  imageRatio,
+  imageSize,
+  showToast,
+  resolveSubmitOwner: submitApi.resolveSubmitOwner,
+  inflightApi: {
+    resumePolling: inflightApi.resumePolling,
+  },
+});
+
 // ---------- 导入到工程 ----------
 // useImport 内部通过 inject 拿 records;只暴露 showToast
 const importApi = useImport({
@@ -191,6 +224,11 @@ const refsApi = useReferences({
   ratio,
   getModelId: () => model.value,
   currentProviderId,
+  // 素材上传目标按当前生成模式分流：图片模式 → runninghub，视频模式 → 视频侧 provider
+  resolveUploadProviderId: () =>
+    generationMode.value === "image"
+      ? DEFAULT_IMAGE_PROVIDER_ID
+      : currentProviderId.value,
   findModelDescriptor,
   showToast,
 });
@@ -227,6 +265,9 @@ onMounted(async () => {
   if (!listProviders().find((p) => p.providerId === DEFAULT_PROVIDER_ID)) {
     registerProvider(minimaxProvider);
   }
+  // 注册图片 provider（RunningHub）
+  registerImageProvider(runningHubProvider);
+  currentImageProvider.value = getImageProviderSync(DEFAULT_IMAGE_PROVIDER_ID);
   // 异步获取当前 provider 实例
   currentProvider.value = await getProvider(currentProviderId.value);
   apiKey.value = await bridge.getApiKey();
@@ -243,9 +284,18 @@ onMounted(async () => {
   }
 });
 
-function onSettingsSave(key: string) {
-  apiKey.value = key;
+function onSettingsSave(key: string, providerId: string) {
+  // 仅当保存的是当前视频 provider 的 key 时更新顶层状态
+  //（图片 provider 的 key 由提交链路按 providerId 现读）
+  if (providerId === currentProviderId.value) {
+    apiKey.value = key;
+  }
   settingsOpen.value = false;
+}
+
+/** 图片生成模式（阶段 2A）：提交文生图任务 */
+function onImageGenerate() {
+  void imageSubmitApi.submitImageGenerate();
 }
 
 const refreshing = ref(false);
@@ -297,6 +347,7 @@ async function refreshProject() {
     <SettingsPanel
       v-if="settingsOpen"
       :initial-key="apiKey || ''"
+      :initial-provider-id="currentProviderId"
       @save="onSettingsSave"
     />
 
@@ -318,36 +369,77 @@ async function refreshProject() {
       <span class="muted" v-if="storageMode === 'fallback'">⚠ 降级存储</span>
     </footer>
 
-    <!-- 浮动窗口：参考素材 + 提示词 + 模型 + 参数按钮 + 生成按钮（贴底覆盖） -->
+    <!-- 浮动窗口：模式切换工具行 + 参考素材 + 提示词 + 模型 + 参数按钮 + 生成按钮（贴底覆盖） -->
     <div class="floating-prompt-bar">
-      <ReferenceList
-        v-model:references="references"
-        :ps-locked="refsApi.psLocked.value"
-        @add="refsApi.addReference"
-        @captureFrame="refsApi.captureFrameAsReference"
-        @captureFrameAndOpenPs="refsApi.captureFrameAndOpenInPs"
-        @captureVideo="refsApi.captureVideoAsReference"
-        @remove="refsApi.removeReference"
-        @confirmPending="refsApi.confirmPendingUpload"
-      />
-      <div class="prompt-divider"></div>
-      <PromptInput
-        v-model:prompt="prompt"
-        v-model:model="model"
-        v-model:ratio="ratio"
-        v-model:duration="duration"
-        v-model:resolution="resolution"
-        :models="providerModels"
-        :constraints="state.constraints.value"
-        :has-references="references.length > 0"
-        :can-submit="canSubmit"
-        :polling="inflightApi.pollingActive.value"
-        :has-api-key="!!apiKey"
-        :has-project="!!projectInfo"
-        :optimizing="submitApi.optimizingPrompt.value"
-        @submit="submitApi.submitGenerate"
-        @optimize="submitApi.optimizePrompt"
-      />
+      <!-- 工具行：书签式模式切换（左） + 抓素材按钮（右） -->
+      <div class="prompt-toolbar">
+        <ModeTabs v-model:mode="generationMode" />
+        <div class="capture-buttons">
+          <button
+            v-if="generationMode === 'video'"
+            class="capture-btn"
+            type="button"
+            @click="refsApi.captureVideoAsReference"
+          >🎬 抓视频</button>
+          <button
+            class="capture-btn"
+            type="button"
+            @click="refsApi.captureFrameAsReference"
+          >🖼 抓帧</button>
+          <button
+            class="capture-btn"
+            type="button"
+            :class="{ 'capture-btn-locked': refsApi.psLocked.value }"
+            :disabled="refsApi.psLocked.value"
+            :title="refsApi.psLocked.value ? '已锁定 2 秒,避免重复启动 PS' : '抓帧后在 Photoshop 中打开'"
+            @click="refsApi.captureFrameAndOpenInPs"
+          >🎨 抓帧→PS</button>
+        </div>
+      </div>
+      <template v-if="generationMode === 'video'">
+        <ReferenceList
+          :references="references"
+          tips="视频≤3 总时长≤15s · 图片≤9"
+          @remove="refsApi.removeReference"
+          @confirmPending="refsApi.confirmPendingUpload"
+        />
+        <div class="prompt-divider"></div>
+        <PromptInput
+          v-model:prompt="prompt"
+          v-model:model="model"
+          v-model:ratio="ratio"
+          v-model:duration="duration"
+          v-model:resolution="resolution"
+          :models="providerModels"
+          :constraints="state.constraints.value"
+          :has-references="references.length > 0"
+          :can-submit="canSubmit"
+          :polling="inflightApi.pollingActive.value"
+          :has-api-key="!!apiKey"
+          :has-project="!!projectInfo"
+          :optimizing="submitApi.optimizingPrompt.value"
+          @submit="submitApi.submitGenerate"
+          @optimize="submitApi.optimizePrompt"
+        />
+      </template>
+      <!-- 图片生成模式：参考素材（无抓视频）+ 图片提示词/参数 -->
+      <template v-else>
+        <ReferenceList
+          :references="references"
+          tips="图片≤9"
+          @remove="refsApi.removeReference"
+          @confirmPending="refsApi.confirmPendingUpload"
+        />
+        <div class="prompt-divider"></div>
+        <ImagePromptInput
+          v-model:prompt="imagePrompt"
+          v-model:ratio="imageRatio"
+          v-model:size="imageSize"
+          :model="imageModel"
+          :models="imageModels"
+          @generate="onImageGenerate"
+        />
+      </template>
     </div>
     <div v-if="toastMsg" class="uxp-toast">{{ toastMsg }}</div>
   </div>
@@ -437,6 +529,38 @@ async function refreshProject() {
   margin: 4px 0 4px;
   background: var(--uxp-host-border-color, #454545);
   opacity: 0.4;
+}
+
+/* 工具行：模式 tab（左，稍大） + 抓素材按钮（右，稍小） */
+.prompt-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.capture-buttons {
+  display: flex;
+  gap: 2px;
+}
+
+.capture-btn {
+  padding: 2px 6px;
+  font-size: 10px;
+  background: var(--uxp-host-border-color, #383838);
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover {
+    background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
+  }
+  &:disabled,
+  &.capture-btn-locked {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
 }
 
 .panel-footer {

@@ -23,16 +23,17 @@ export const bridge = {
     ensure().recordsRead(target),
   recordsWrite: (data: ProjectRecords) => ensure().recordsWrite(data),
   probePrimary: (target?: { projectPath?: string }) => ensure().probePrimary(target),
-  pickAndUploadReference: (kind: FileKind) =>
-    ensure().pickAndUploadReference({ kind }),
+  pickAndUploadReference: (args: { kind: FileKind; providerId?: string }) =>
+    ensure().pickAndUploadReference(args),
   reuploadReference: (args: any) => ensure().reuploadReference(args),
   uploadExistingFileAsReference: (args: any) =>
     ensure().uploadExistingFileAsReference(args),
   downloadFile: (args: any) => ensure().downloadFile(args),
   insertToTimeline: (args: any) => ensure().insertToTimeline(args),
   importToProject: (args: any) => ensure().importToProject(args),
-  getApiKey: () => ensure().getApiKey(),
-  setApiKey: (k: string) => ensure().setApiKey(k),
+  getApiKey: (providerId?: string) => ensure().getApiKey({ providerId }),
+  setApiKey: (k: string, providerId?: string) =>
+    ensure().setApiKey(k, providerId),
   getFeishuConfig: () => ensure().getFeishuConfig(),
   setFeishuConfig: (cfg: any) => ensure().setFeishuConfig(cfg),
   reportGenerated: (record: any, purpose?: any) =>

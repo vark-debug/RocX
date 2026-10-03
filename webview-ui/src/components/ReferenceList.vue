@@ -1,18 +1,16 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import type { ReferenceItem, FileKind } from "@shared/messages";
 
-const props = defineProps<{
+/**
+ * 纯参考素材列表（无标题/无抓素材按钮——按钮已上移到模式 tab 工具行）。
+ * 生成模式差异由父级控制传参，本组件只负责展示与移除/确认。
+ */
+defineProps<{
   references: ReferenceItem[];
-  /** 抓帧→PS 按钮 2 秒防抖锁 */
-  psLocked?: boolean;
+  /** 素材限制提示文案（随生成模式变化，由父级传入） */
+  tips?: string;
 }>();
 const emit = defineEmits<{
-  "update:references": [ReferenceItem[]];
-  add: [FileKind];
-  captureFrame: [];
-  captureFrameAndOpenPs: [];
-  captureVideo: [];
   remove: [number];
   confirmPending: [number];
 }>();
@@ -48,23 +46,8 @@ function showConfirmPending(ref: ReferenceItem): boolean {
 </script>
 
 <template>
-  <section class="reference-section">
-    <div class="ref-header">
-      <span class="title">参考素材 ({{ references.length }})</span>
-      <div class="add-buttons">
-        <button @click="emit('captureVideo')" type="button" class="add-btn">🎬 抓视频</button>
-        <button @click="emit('captureFrame')" type="button" class="add-btn">🖼 抓帧</button>
-        <button
-          @click="emit('captureFrameAndOpenPs')"
-          type="button"
-          class="add-btn"
-          :class="{ 'add-btn-locked': psLocked }"
-          :disabled="psLocked"
-          :title="psLocked ? '已锁定 2 秒,避免重复启动 PS' : '抓帧后在 Photoshop 中打开'"
-        >🎨 抓帧→PS</button>
-      </div>
-    </div>
-    <div v-if="references.length > 0" class="ref-list">
+  <section v-if="references.length > 0" class="reference-section">
+    <div class="ref-list">
       <div
         v-for="(ref, idx) in references"
         :key="idx"
@@ -90,7 +73,7 @@ function showConfirmPending(ref: ReferenceItem): boolean {
         >修改完成</button>
         <button class="remove-btn" @click="emit('remove', idx)" type="button">×</button>
       </div>
-      <div class="ref-tips">视频≤3 总时长≤15s · 图片≤9</div>
+      <div class="ref-tips">{{ tips }}</div>
     </div>
   </section>
 </template>
@@ -101,43 +84,8 @@ function showConfirmPending(ref: ReferenceItem): boolean {
   flex-shrink: 0;
 }
 
-.ref-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  .title {
-    font-size: 11px;
-    font-weight: 500;
-    opacity: 0.8;
-  }
-}
-
-.add-buttons {
-  display: flex;
-  gap: 2px;
-}
-
-.add-btn {
-  padding: 2px 6px;
-  font-size: 10px;
-  background: var(--uxp-host-border-color, #383838);
-  color: inherit;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  &:hover {
-    background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
-  }
-  &:disabled,
-  &.add-btn-locked {
-    opacity: 0.5;
-    cursor: not-allowed;
-    pointer-events: none;
-  }
-}
-
 .ref-list {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .ref-item {

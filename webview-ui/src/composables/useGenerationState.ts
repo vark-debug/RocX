@@ -19,6 +19,7 @@ import { SharedRefsKey } from "../providers/state";
 import {
   VIDEO_PARAM_CONSTRAINTS,
   type GenerationRecord,
+  type VideoModel,
   type VideoParamConstraints,
   type ProjectRecords,
   type PromptOptimization,
@@ -34,12 +35,14 @@ export function useGenerationState(opts: {
   /** 取当前所有在飞任务的 record 副本（权威状态），用于切工程时保留非本工程在飞任务 */
   getInflightRecords: () => GenerationRecord[];
 }) {
-  const shared = inject(SharedRefsKey);
-  if (!shared) {
+  const sharedRaw = inject(SharedRefsKey);
+  if (!sharedRaw) {
     throw new Error("useGenerationState requires SharedRefs provider in main-webview");
   }
+  // 窄化别名：const 初始化取 rvalue 的窄化类型，闭包内不再 possibly undefined
+  const shared = sharedRaw;
   const constraints = computed<VideoParamConstraints>(
-    () => VIDEO_PARAM_CONSTRAINTS[shared.model.value],
+    () => VIDEO_PARAM_CONSTRAINTS[shared.model.value as VideoModel],
   );
 
   /**

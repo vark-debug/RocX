@@ -15,6 +15,7 @@ export type ReferenceType = "reference_video" | "reference_image" | "reference_a
 /** Provider 模型能力位（用于 UI 按能力隐藏按钮） */
 export type VideoGenCapability =
   | "videoGeneration"
+  | "imageGeneration"
   | "promptOptimization"
   | "resolutionUpscale"
   | "imageReference"
@@ -26,6 +27,7 @@ export const REPORT_PURPOSE = {
   VIDEO_GEN: "视频生成",
   UPSCALE: "分辨率升级",
   PROMPT_OPT: "提示词优化",
+  IMAGE_GEN: "图片生成",
 } as const;
 
 export type ReportPurpose =
@@ -45,6 +47,8 @@ export interface ReferenceItem {
   type: ReferenceType;
   localPath: string;
   fileId?: string;
+  /** fileId 归属的 provider id；缺省视为 legacy 单 provider 时代的默认 provider */
+  uploadProvider?: string;
   uploadedAt?: string;
   fileName: string;
   sizeBytes: number;
@@ -83,18 +87,36 @@ export interface GenerationRecord {
   id: string;
   createdAt: string;
   prompt: string;
+  /** 记录类型：缺省 "video"（老记录兼容）；"image" 为图片生成记录 */
+  kind?: "video" | "image";
   params: {
-    model: VideoModel;
+    /** 多 provider 后 model id 由 provider 决定，放宽为 string */
+    model: string;
     ratio: VideoRatio;
     duration: number;
-    resolution: VideoResolution;
+    /** 多 provider 后分辨率档位名由 provider 决定，放宽为 string */
+    resolution: string;
     /** 当前记录对应的 provider id；老记录缺失时默认 "minimax" */
     provider?: string;
+  };
+  /**
+   * 图片生成记录专属参数（kind === "image" 时使用）。
+   * 视频语义的 duration/resolution 对图片无意义，图片的尺寸档位/像素在这里。
+   */
+  imageParams?: {
+    width: number;
+    height: number;
+    /** 尺寸档位："1K" | "2K"（provider 私有值放 provider 内映射） */
+    resolution: string;
+    /** 输出格式："jpeg" | "png" */
+    outputFormat: string;
   };
   references: ReferenceItem[];
   taskId?: string;
   workFile?: string;
   importedFile?: string;
+  /** 图片生成（阶段 2A 预览）：结果图 CDN URL（下载/导入在后续阶段） */
+  resultUrl?: string;
   status: RecordStatus;
   thumb?: string;
   error?: {
@@ -381,8 +403,8 @@ export interface UxptoWebviewAPI {
   }>;
 
   /** 获取 / 设置 API Key（uxp.storage） */
-  getApiKey(): Promise<string | null>;
-  setApiKey(key: string): Promise<{ ok: boolean; error?: string }>;
+  getApiKey(args?: { providerId?: string }): Promise<string | null>;
+  setApiKey(key: string, providerId?: string): Promise<{ ok: boolean; error?: string }>;
 
   /** 飞书多维表格联动设置（与 API Key 同位置持久化） */
   getFeishuConfig(): Promise<{

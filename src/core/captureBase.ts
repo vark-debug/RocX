@@ -158,6 +158,8 @@ export async function pollForNewestFile(
 export async function uploadReferenceFile(args: {
   filePath: string;
   fileName: string;
+  /** 目标 provider id；缺省回落默认 provider */
+  providerId?: string;
   /** 兜底 token key 列表;默认 ["MiniMax.exportFolderToken"] */
   fallbackTokenKeys?: string[];
 }): Promise<{
@@ -167,8 +169,8 @@ export async function uploadReferenceFile(args: {
   error?: string;
 }> {
   try {
-    const apiKey = await storage.getApiKey();
-    if (!apiKey) return { ok: false, error: "未配置 MiniMax API Key" };
+    const apiKey = await storage.getApiKey(args.providerId);
+    if (!apiKey) return { ok: false, error: "未配置 API Key" };
 
     let file: any = await filesCore.getEntryAnyPath(args.filePath);
     if (!file) {
@@ -197,6 +199,7 @@ export async function uploadReferenceFile(args: {
       apiKey,
       fileToken: file,
       fileName: args.fileName,
+      providerId: args.providerId,
     });
     if (!r.ok || !r.fileId) return { ok: false, error: r.error };
     return {

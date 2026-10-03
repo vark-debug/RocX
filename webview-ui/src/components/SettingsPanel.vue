@@ -6,14 +6,35 @@ declare const __ROCX_DEV__: boolean;
 
 const props = defineProps<{
   initialKey: string;
+  /** 初始选中的 provider id（当前视频 provider） */
+  initialProviderId?: string;
 }>();
 const emit = defineEmits<{
-  save: [string];
+  save: [string, string];
 }>();
 
+/** 可配置 key 的 provider 列表（视频 + 图片） */
+const KEY_PROVIDERS = [
+  { id: "minimax", label: "MiniMax" },
+  { id: "runninghub", label: "RunningHub" },
+] as const;
+
+const providerId = ref<string>(props.initialProviderId || "minimax");
 const apiKey = ref(props.initialKey);
 const saving = ref(false);
 const message = ref("");
+
+/** 切换 provider：加载该 provider 已存的 key（无则清空输入框） */
+async function switchProvider(id: string) {
+  if (id === providerId.value) return;
+  providerId.value = id;
+  message.value = "";
+  try {
+    apiKey.value = (await bridge.getApiKey(id)) || "";
+  } catch {
+    apiKey.value = "";
+  }
+}
 
 // ---------- 飞书多维表格联动 ----------
 const feishuUrl = ref("");
@@ -65,11 +86,11 @@ async function saveFeishu() {
 async function save() {
   saving.value = true;
   message.value = "";
-  const r = await bridge.setApiKey(apiKey.value);
+  const r = await bridge.setApiKey(apiKey.value, providerId.value);
   saving.value = false;
   if (r.ok) {
     message.value = "✓ 已保存";
-    emit("save", apiKey.value);
+    emit("save", apiKey.value, providerId.value);
   } else {
     message.value = `保存失败: ${r.error}`;
   }
@@ -108,8 +129,21 @@ function attachDebugHandlers(MiniMaxProvider: any) {
 
 <template>
   <section class="settings-section">
+    <!-- API Key：按 provider 切换存储（MiniMax = 视频生成 / RunningHub = 图片生成） -->
     <div class="settings-row">
-      <label class="label">MiniMax API Key</label>
+      <label class="label">API Key</label>
+      <div class="provider-tabs">
+        <button
+          v-for="p in KEY_PROVIDERS"
+          :key="p.id"
+          type="button"
+          class="provider-tab"
+          :class="{ active: providerId === p.id }"
+          @click="switchProvider(p.id)"
+        >{{ p.label }}</button>
+      </div>
+    </div>
+    <div class="settings-row">
       <input
         v-model="apiKey"
         type="password"
@@ -198,6 +232,33 @@ function attachDebugHandlers(MiniMaxProvider: any) {
   display: flex;
   gap: 4px;
   align-items: center;
+  & + .settings-row {
+    margin-top: 4px;
+  }
+}
+
+.provider-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.provider-tab {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-family: inherit;
+  background: var(--uxp-host-background-color, #2b2b2b);
+  color: var(--uxp-host-text-color-secondary, #b0b0b0);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover {
+    color: var(--uxp-host-text-color, #fff);
+  }
+  &.active {
+    color: var(--uxp-host-link-text-color, #4b9cf5);
+    border-color: var(--uxp-host-link-text-color, #4b9cf5);
+    background: rgba(75, 156, 245, 0.12);
+  }
 }
 
 .label {

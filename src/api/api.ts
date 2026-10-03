@@ -65,9 +65,9 @@ export const api = {
   },
 
   // 文件 IO / 上传
-  async pickAndUploadReference(args: { kind: "video" | "audio" | "image" }) {
-    const apiKey = await storage.getApiKey();
-    if (!apiKey) return { ok: false, error: "未配置 MiniMax API Key" };
+  async pickAndUploadReference(args: { kind: "video" | "audio" | "image"; providerId?: string }) {
+    const apiKey = await storage.getApiKey(args.providerId);
+    if (!apiKey) return { ok: false, error: "未配置 API Key" };
 
     const pick = await filesCore.pickAndValidate(args.kind);
     if (!pick.ok || !pick.file) return { ok: false, error: pick.error };
@@ -76,6 +76,7 @@ export const api = {
       apiKey,
       fileToken: pick.file,
       fileName: pick.fileName || "ref.bin",
+      providerId: args.providerId,
     });
     if (!uploaded.ok || !uploaded.fileId) {
       return { ok: false, error: uploaded.error };
@@ -105,15 +106,17 @@ export const api = {
     localPath: string;
     fileName: string;
     sizeBytes?: number;
+    providerId?: string;
   }) {
-    const apiKey = await storage.getApiKey();
-    if (!apiKey) return { ok: false, error: "未配置 MiniMax API Key" };
+    const apiKey = await storage.getApiKey(args.providerId);
+    if (!apiKey) return { ok: false, error: "未配置 API Key" };
     const fileToken = await filesCore.getFileByPath(args.localPath);
     if (!fileToken) return { ok: false, error: "本地文件不可访问，请重新选择" };
     const r = await uploadCore.uploadFile({
       apiKey,
       fileToken,
       fileName: args.fileName,
+      providerId: args.providerId,
     });
     if (!r.ok) return { ok: false, error: r.error };
     return { ok: true, fileId: r.fileId };
@@ -123,15 +126,17 @@ export const api = {
     localPath: string;
     fileName: string;
     kind: "video" | "audio" | "image";
+    providerId?: string;
   }) {
-    const apiKey = await storage.getApiKey();
-    if (!apiKey) return { ok: false, error: "未配置 MiniMax API Key" };
+    const apiKey = await storage.getApiKey(args.providerId);
+    if (!apiKey) return { ok: false, error: "未配置 API Key" };
     const fileToken = await filesCore.getFileByPath(args.localPath);
     if (!fileToken) return { ok: false, error: "本地文件不可访问" };
     const r = await uploadCore.uploadFile({
       apiKey,
       fileToken,
       fileName: args.fileName,
+      providerId: args.providerId,
     });
     if (!r.ok || !r.fileId) return { ok: false, error: r.error };
     const refType =
@@ -201,11 +206,11 @@ export const api = {
   },
 
   // API Key
-  async getApiKey() {
-    return await storage.getApiKey();
+  async getApiKey(args?: { providerId?: string }) {
+    return await storage.getApiKey(args?.providerId);
   },
-  async setApiKey(key: string) {
-    return await storage.setApiKey(key);
+  async setApiKey(key: string, providerId?: string) {
+    return await storage.setApiKey(key, providerId);
   },
 
   // 飞书多维表格联动
@@ -253,8 +258,12 @@ export const api = {
     return await framesCore.captureActiveFrame(args);
   },
 
-  // 抓取当前 playhead 帧 + 自动上传 MiniMax，返回 ReferenceItem（含缩略图 dataUrl）
-  async captureAndUploadAsReference(args?: { width?: number; height?: number }) {
+  // 抓取当前 playhead 帧 + 自动上传到目标 provider，返回 ReferenceItem（含缩略图 dataUrl）
+  async captureAndUploadAsReference(args?: {
+    width?: number;
+    height?: number;
+    providerId?: string;
+  }) {
     return await framesCore.captureAndUploadAsReference(args);
   },
 
@@ -263,8 +272,12 @@ export const api = {
     return await framesCore.captureOnlyAsReference(args);
   },
 
-  // 上传 reference 对应的本地文件到 MiniMax
-  async uploadReferenceFile(args: { filePath: string; fileName: string }) {
+  // 上传 reference 对应的本地文件到目标 provider（providerId 由 webview 按当前模式分流）
+  async uploadReferenceFile(args: {
+    filePath: string;
+    fileName: string;
+    providerId?: string;
+  }) {
     // 同一个实现用于图片和视频
     return await framesCore.uploadReferenceFile(args);
   },

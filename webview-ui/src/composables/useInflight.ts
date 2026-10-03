@@ -22,7 +22,9 @@
 import { computed, shallowReactive, inject } from "vue";
 import { bridge } from "../services/bridge";
 import { usePolling } from "./usePolling";
+import { DEFAULT_PROVIDER_ID, DEFAULT_IMAGE_PROVIDER_ID } from "../providers/core/registry";
 import { SharedRefsKey } from "../providers/state";
+import { REPORT_PURPOSE } from "@shared/messages";
 import type { GenerationRecord, ReportPurpose } from "@shared/messages";
 
 type RefAny<T> = { value: T };
@@ -36,6 +38,10 @@ export interface ProjectInfo {
 /** polling start 选项(传给 usePolling().start) */
 interface PollingStartOpts {
   taskId: string;
+  /** 该任务提交时锁定的 provider id */
+  providerId: string;
+  /** provider 表类型：video（默认）或 image */
+  providerKind?: "video" | "image";
   apiKey: string;
   onUpdate: (resp: any) => void;
   onTerminal: (resp: any, err?: Error) => void;
@@ -50,10 +56,12 @@ export function useInflight(opts: {
    */
   onTerminalSuccess?: (rec: GenerationRecord, purpose?: ReportPurpose) => void;
 }) {
-  const shared = inject(SharedRefsKey);
-  if (!shared) {
+  const sharedRaw = inject(SharedRefsKey);
+  if (!sharedRaw) {
     throw new Error("useInflight requires SharedRefs provider in main-webview");
   }
+  // 窄化别名：const 初始化取 rvalue 的窄化类型，闭包内不再 possibly undefined
+  const shared = sharedRaw;
   const inflight = shallowReactive(
     new Map<string, { record: GenerationRecord; polling: boolean }>(),
   );
@@ -112,9 +120,17 @@ export function useInflight(opts: {
    * 启动/重启一个 record 的轮询。
    * 防重复启动:同一 record.id 已在轮询就不再 start
    * (loadRecords 的故障恢复与 onTerminal 的 resumeNextGenerating 都会调进来)
+   *
+   * kind 感知:
+   * - video:用 shared.apiKey(当前 provider 的 key);成功后经 bridge.downloadFile 落盘
+   * - image:按记录的 provider 取 per-provider key;成功后只记 resultUrl(预览,不下载)
    */
-  function resumePolling(rec: GenerationRecord) {
-    if (!rec.taskId || !shared.apiKey.value) return;
+  async function resumePolling(rec: GenerationRecord) {
+    if (!rec.taskId) return;
+    const isImage = rec.kind === "image";
+    // video 沿用旧守卫:当前 provider 无 key 直接不启动
+    if (!isImage && !shared.apiKey.value) return;
+    // 防重复启动的登记必须先于任何 await(同步执行),避免并发重入双启
     if (isPolling(rec.id)) return;
     // 登记进在飞任务表(已存在则更新为最新 record 副本)
     const prev = inflight.get(rec.id);
@@ -123,9 +139,30 @@ export function useInflight(opts: {
       polling: true,
     });
 
+    // image:按记录锁定的 provider 取 per-provider key(存储层回落 legacy 默认 key)
+    const apiKey = isImage
+      ? await bridge.getApiKey(rec.params.provider || DEFAULT_IMAGE_PROVIDER_ID)
+      : shared.apiKey.value;
+    if (!apiKey) {
+      if (isImage) {
+        // 先 commit(同步进 records)再从在飞表摘除
+        commitInflight(rec.id, {
+          status: "failed",
+          error: { message: "RunningHub API Key 缺失，无法查询任务状态" },
+        });
+      }
+      inflight.delete(rec.id);
+      return;
+    }
+
     const startOpts: PollingStartOpts = {
       taskId: rec.taskId,
-      apiKey: shared.apiKey.value,
+      // 锁定提交时的 provider（老记录缺 provider 时回落默认）
+      providerId: isImage
+        ? rec.params.provider || DEFAULT_IMAGE_PROVIDER_ID
+        : rec.params.provider || DEFAULT_PROVIDER_ID,
+      providerKind: isImage ? "image" : "video",
+      apiKey,
       onUpdate: (resp) => {
         commitInflight(rec.id, {
           lastPolledAt: new Date().toISOString(),
@@ -141,6 +178,31 @@ export function useInflight(opts: {
               status: "failed",
               error: { message: err?.message || "查询失败" },
             });
+            return;
+          }
+          if (isImage) {
+            // 图片:成功只记 resultUrl 供预览(下载/导入在后续阶段)
+            if (resp.status === "succeeded" && resp.content?.url) {
+              const done = commitInflight(rec.id, {
+                status: "generated",
+                resultUrl: resp.content.url,
+                usage: resp.usage,
+              });
+              if (done) opts.onTerminalSuccess?.(done, REPORT_PURPOSE.IMAGE_GEN);
+            } else if (resp.status === "succeeded") {
+              commitInflight(rec.id, {
+                status: "failed",
+                error: { message: "任务成功但响应缺少图片地址(content.url 为空)" },
+              });
+            } else if (resp.status === "failed" || resp.status === "cancelled") {
+              commitInflight(rec.id, {
+                status: "failed",
+                error: {
+                  message: resp.error?.message || "生成失败",
+                  requestId: resp.request_id,
+                },
+              });
+            }
             return;
           }
           if (resp.status === "succeeded" && resp.content?.url) {

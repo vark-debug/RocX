@@ -17,10 +17,12 @@ import type { GenerationRecord } from "@shared/messages";
 export function useImport(opts: {
   showToast: (msg: string | unknown) => void;
 }) {
-  const shared = inject(SharedRefsKey);
-  if (!shared) {
+  const sharedRaw = inject(SharedRefsKey);
+  if (!sharedRaw) {
     throw new Error("useImport requires SharedRefs provider in main-webview");
   }
+  // 窄化别名：const 初始化取 rvalue 的窄化类型，闭包内不再 possibly undefined
+  const shared = sharedRaw;
 
   async function importToProject(ids: string[]) {
     let r: any;

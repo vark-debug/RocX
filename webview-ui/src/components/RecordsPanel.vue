@@ -71,6 +71,17 @@ const {
 } = preview;
 const mainVideoRef = actions.mainVideoRef;
 
+/** 缩略图 URL：图片记录直接用 provider 返回的 resultUrl，视频记录用 canvas 抽帧 blob */
+function thumbSrcOf(rec: GenerationRecord): string {
+  if (rec.kind === "image") return rec.resultUrl || "";
+  return canvasThumbCache.value[rec.id] || "";
+}
+
+/** 当前选中是否为图片记录（控制视频专属 UI 的显隐） */
+function selectedIsImage(): boolean {
+  return selected.value?.kind === "image";
+}
+
 /**
  * 多工程归属提示（PR 同一进程可打开多个工程）：
  * 一个工程的任务在飞时切到另一个工程，这条记录仍会继续轮询并保留在列表里，
@@ -111,10 +122,10 @@ function selectedIsForeign(): boolean {
         @click="pick(rec)"
         :title="rec.prompt.slice(0, 60)"
       >
-        <!-- 优先用 webview 端 canvas 抽帧得到的 blob URL（轻量、立即显示） -->
+        <!-- 优先用 webview 端 canvas 抽帧得到的 blob URL（轻量、立即显示）；图片记录直接用 resultUrl -->
         <img
           v-if="thumbModeOf(rec) === 'image'"
-          :src="canvasThumbCache[rec.id]"
+          :src="thumbSrcOf(rec)"
           class="thumb-image"
           draggable="false"
         />
@@ -128,7 +139,7 @@ function selectedIsForeign(): boolean {
           @error="onThumbError(rec)"
         />
         <div v-else class="thumb-placeholder">
-          <span class="thumb-placeholder-icon">{{ rec.status === 'failed' ? '⚠' : '🎬' }}</span>
+          <span class="thumb-placeholder-icon">{{ rec.status === 'failed' ? '⚠' : (rec.kind === 'image' ? '🖼' : '🎬') }}</span>
         </div>
         <div
           class="thumb-status"
@@ -157,8 +168,10 @@ function selectedIsForeign(): boolean {
           <span class="meta-model">{{ selected.params.model }}</span>
           <span class="meta-sep">·</span>
           <span class="meta-param">{{ selected.params.ratio }}</span>
-          <span class="meta-sep">·</span>
-          <span class="meta-param">{{ selected.params.duration }}s</span>
+          <template v-if="!selectedIsImage()">
+            <span class="meta-sep">·</span>
+            <span class="meta-param">{{ selected.params.duration }}s</span>
+          </template>
           <span class="meta-sep">·</span>
           <span class="meta-param">{{ selected.params.resolution }}</span>
           <span class="meta-sep">·</span>
@@ -167,7 +180,7 @@ function selectedIsForeign(): boolean {
           <span class="status-dot" :style="{ background: statusOf(selected).color }"></span>
           <span class="status-label">{{ statusOf(selected).label }}</span>
           <button
-            v-if="selected.status === 'failed' && selected.taskId"
+            v-if="!selectedIsImage() && selected.status === 'failed' && selected.taskId"
             class="header-btn"
             @click="emitRetrySelected"
             title="重试"
@@ -194,6 +207,13 @@ function selectedIsForeign(): boolean {
             @dragend="dragHandlers.onDragEnd"
             @play="isPlaying = true"
             @pause="isPlaying = false"
+          />
+          <!-- 图片记录大图预览（无 workFile，直接用 provider resultUrl） -->
+          <img
+            v-if="selected.kind === 'image' && selected.resultUrl"
+            :src="selected.resultUrl"
+            class="main-image"
+            draggable="false"
           />
           <!-- 中心播放按钮 SVG -->
           <div
@@ -234,7 +254,7 @@ function selectedIsForeign(): boolean {
               HTTP {{ selected.error.httpStatus }}
             </div>
             <button
-              v-if="canRetrySelected"
+              v-if="!selectedIsImage() && canRetrySelected"
               class="retry-btn"
               @click="emitRetrySelected"
             >↻ 填入生成器</button>
@@ -257,13 +277,14 @@ function selectedIsForeign(): boolean {
           title="调用 video_regeneration 把这条 768P 视频提升到 2K（H3 专用）"
         >⬆ 升级到 2K</button>
         <button
+          v-if="!selectedIsImage()"
           class="action-btn"
           @click="emitRetrySelected"
           title="把这条记录的 prompt / 参数 / 参考素材填回生成器（不自动提交）"
         >↻ 填入生成器</button>
         <span class="action-spacer"></span>
         <button
-          v-if="selected.status === 'generated' || selected.status === 'imported'"
+          v-if="!selectedIsImage() && (selected.status === 'generated' || selected.status === 'imported')"
           class="action-btn reference-btn"
           @click="emitUseAsReference(selected)"
           title="把这条记录的视频作为参考素材添加到生成器"

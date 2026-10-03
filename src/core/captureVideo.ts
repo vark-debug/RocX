@@ -238,10 +238,11 @@ export const captureVideoCore = {
    * 这里 re-export 是为了 captureVideoCore.uploadReferenceFile 公开签名不变。
    * 视频历史素材兜底只检查 exportFolderToken(无 sourceFolderToken)。
    */
-  async uploadReferenceFile(args: { filePath: string; fileName: string }) {
+  async uploadReferenceFile(args: { filePath: string; fileName: string; providerId?: string }) {
     return uploadReferenceFile({
       filePath: args.filePath,
       fileName: args.fileName,
+      providerId: args.providerId,
       fallbackTokenKeys: ["MiniMax.exportFolderToken"],
     });
   },

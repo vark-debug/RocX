@@ -1,0 +1,183 @@
+/**
+ * 图片生成提交 composable（阶段 2A 文生图 + 2B 图生图）
+ *
+ * 责任:
+ * - submitImageGenerate(): 取 per-provider key / 归属工程 / 写 image record /
+ *   经 image registry 取 provider 调 createImage / 启动轮询（复用 usePolling + inflight）
+ * - 智能路由在 provider 内部（references 非空 → image-to-image）；
+ *   这里只做素材准入：仅图片类参考参与，视频参考跳过并提示
+ *
+ * 与 useSubmit 的差异:
+ * - key 按图片 provider（runninghub）读取，不用 shared.apiKey（那是视频 provider 的）
+ * - count 固定 1（RunningHub 单次 1 张）；张数 UI 首版固定
+ * - 图生图不走 fileId 引用：提交时读本地文件转 Base64 data URI 直传
+ *   （RH 对外链 / 纯文件名引用均报 1007 无法识别，实测弃用）
+ */
+import { inject } from "vue";
+import { bridge } from "../services/bridge";
+import {
+  getImageProviderSync,
+  DEFAULT_IMAGE_PROVIDER_ID,
+} from "../providers/core/registry";
+import { ratioToSize } from "../providers/runninghub/wireFormat";
+import { resetCaptureContext } from "./useCaptureContext";
+import { safeProviderCall } from "./useProviderSafe";
+import { SharedRefsKey } from "../providers/state";
+import type { GenerationRecord } from "@shared/messages";
+import type { ImageGenCreateRequest } from "../providers/core/types";
+
+type RefAny<T> = { value: T };
+
+export function useImageSubmit(opts: {
+  /** 当前图片 model id（main-webview 顶层持有） */
+  imageModel: RefAny<string>;
+  /** 图片提示词（独立于视频 prompt） */
+  imagePrompt: RefAny<string>;
+  /** 宽高比 */
+  imageRatio: RefAny<string>;
+  /** 尺寸档位 "1K" | "2K" */
+  imageSize: RefAny<string>;
+  /** toast */
+  showToast: (msg: string | unknown) => void;
+  /** 复用 useSubmit 的归属解析（抓素材锁定 > 实时活动工程） */
+  resolveSubmitOwner: () => Promise<{ path: string; guid: string; name: string } | null>;
+  /** 共享轮询（与视频生成同一个 inflight / polling_ 单例） */
+  inflightApi: {
+    resumePolling: (rec: GenerationRecord) => void;
+  };
+}) {
+  const sharedRaw = inject(SharedRefsKey);
+  if (!sharedRaw) {
+    throw new Error("useImageSubmit requires SharedRefs provider in main-webview");
+  }
+  const shared = sharedRaw;
+
+  // ---------- 提交图片生成 ----------
+  async function submitImageGenerate() {
+    const apiKey = await bridge.getApiKey(DEFAULT_IMAGE_PROVIDER_ID);
+    if (!apiKey) {
+      opts.showToast("请在设置里配置 RunningHub API Key");
+      return;
+    }
+    const owner = await opts.resolveSubmitOwner();
+    if (!owner || !owner.path) {
+      opts.showToast("无活动 PR 项目，无法记录生成历史");
+      return;
+    }
+    const provider = getImageProviderSync(DEFAULT_IMAGE_PROVIDER_ID);
+    if (!provider) {
+      opts.showToast("图片 provider 未注册");
+      return;
+    }
+    const modelDesc = provider.models.find((m) => m.modelId === opts.imageModel.value);
+    if (!modelDesc || !modelDesc.capabilities.includes("imageGeneration")) {
+      opts.showToast("当前图片模型不支持生成");
+      return;
+    }
+    // 素材准入：仅图片类参考参与图生图；视频参考在图片模式下跳过
+    const imageRefs = shared.references.value.filter(
+      (r) => r.type === "reference_image",
+    );
+    const videoRefs = shared.references.value.filter(
+      (r) => r.type === "reference_video",
+    );
+    if (videoRefs.length > 0) {
+      opts.showToast(
+        `已忽略 ${videoRefs.length} 个视频参考素材（图片生成仅支持图片参考）`,
+      );
+    }
+    if (!opts.imagePrompt.value.trim()) return;
+
+    // 图生图走 Base64 直传：读本地文件转 data URI（外链/文件名引用会被 RH 1007 拒绝）
+    const dataUris: string[] = [];
+    if (imageRefs.length > 0) {
+      let readFailed = 0;
+      for (const r of imageRefs) {
+        const dr = await bridge.readAsDataUrl(r.localPath);
+        if (dr.ok && dr.dataUrl) dataUris.push(dr.dataUrl);
+        else readFailed++;
+      }
+      if (dataUris.length === 0) {
+        opts.showToast("参考素材读取失败，无法作为图生图输入");
+        return;
+      }
+      if (readFailed > 0) {
+        opts.showToast(`${readFailed} 个参考素材读取失败，已跳过`);
+      }
+    }
+
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const size = ratioToSize(opts.imageRatio.value, opts.imageSize.value);
+    const newRec: GenerationRecord = {
+      id,
+      createdAt: now,
+      prompt: opts.imagePrompt.value,
+      kind: "image",
+      params: {
+        model: opts.imageModel.value,
+        ratio: opts.imageRatio.value as GenerationRecord["params"]["ratio"],
+        duration: 0,
+        resolution: opts.imageSize.value,
+        provider: DEFAULT_IMAGE_PROVIDER_ID,
+      },
+      imageParams: {
+        width: size.width,
+        height: size.height,
+        resolution: opts.imageSize.value,
+        outputFormat: "png",
+      },
+      references: imageRefs,
+      status: "pending",
+      submittedAt: now,
+      projectGuid: owner.guid,
+      projectPath: owner.path,
+    };
+    shared.records.value.unshift(newRec);
+    // 一次提交 = 一次完整的输入清空（与视频提交同语义）
+    opts.imagePrompt.value = "";
+    shared.references.value = [];
+    resetCaptureContext();
+
+    const req: ImageGenCreateRequest = {
+      model: opts.imageModel.value,
+      prompt: newRec.prompt,
+      ratio: opts.imageRatio.value,
+      resolution: opts.imageSize.value,
+      outputFormat: "png",
+      count: 1,
+      references: imageRefs,
+      referencesDataUris: dataUris,
+    };
+    const r = await safeProviderCall(() => provider.createImage(req, apiKey));
+    if (!r.ok) {
+      const idx = shared.records.value.findIndex((rec) => rec.id === id);
+      if (idx >= 0) {
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
+          status: "failed",
+          error: r.error,
+        };
+      }
+      return;
+    }
+    const task_id = r.data.taskId;
+    const idx = shared.records.value.findIndex((rec) => rec.id === id);
+    if (idx >= 0) {
+      shared.records.value[idx] = {
+        ...shared.records.value[idx],
+        taskId: task_id,
+        status: "generating",
+      };
+    }
+    opts.inflightApi.resumePolling({
+      ...newRec,
+      taskId: task_id,
+      status: "generating",
+    });
+  }
+
+  return {
+    submitImageGenerate,
+  };
+}

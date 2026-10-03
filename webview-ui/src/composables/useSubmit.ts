@@ -2,8 +2,8 @@
  * 提交生成 / 升级 2K / 优化提示词 composable
  *
  * 责任:
- * - submitGenerate(): 校验 capability / 写 pending record / 调 MiniMax createVideo /
- *   dry-run 分支 / 启动轮询
+ * - submitGenerate(): 校验 capability / 写 pending record / 经 registry 取当前 provider
+ *   调 createVideo / dry-run 分支 / 启动轮询
  * - upgradeTo2K(rec): 像素提升 re-create
  * - optimizePrompt(): 异步任务复用 polling_,完成后把 prompt.content 写回 UI
  * - resolveSubmitOwner(): 抓素材时锁定的 CaptureContext 优先,无锁定回落实时活动工程
@@ -16,7 +16,8 @@
  */
 import { ref, inject } from "vue";
 import { bridge } from "../services/bridge";
-import { MiniMaxProvider } from "../providers/minimax";
+import { getProvider } from "../providers/core/registry";
+import { ensureRefsForProvider } from "./useEnsureRefs";
 import { getCaptureContext, lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import { safeProviderCall } from "./useProviderSafe";
 import { SharedRefsKey } from "../providers/state";
@@ -28,6 +29,7 @@ import type {
   PromptOptimization,
 } from "@shared/messages";
 import type {
+  ModelDescriptor,
   VideoGenCapability,
   VideoGenCreateRequest,
 } from "../providers/core/types";
@@ -42,6 +44,8 @@ export interface UseSubmitInflightApi {
   polling_: {
     start: (opts: {
       taskId: string;
+      /** 该任务提交时锁定的 provider id */
+      providerId: string;
       apiKey: string;
       onUpdate: (resp: any) => void;
       onTerminal: (resp: any, err?: Error) => void;
@@ -68,10 +72,12 @@ export function useSubmit(opts: {
   /** 把一次提示词优化结果 push 进持久化数组(不入 records 列表) */
   recordPromptOptimization: (opt: PromptOptimization) => void;
 }) {
-  const shared = inject(SharedRefsKey);
-  if (!shared) {
+  const sharedRaw = inject(SharedRefsKey);
+  if (!sharedRaw) {
     throw new Error("useSubmit requires SharedRefs provider in main-webview");
   }
+  // 窄化别名：const 初始化取 rvalue 的窄化类型，闭包内不再 possibly undefined
+  const shared = sharedRaw;
   const { inflightApi } = opts;
   const { inflight, polling_, commitInflight, resumePolling, pollingActive } = inflightApi;
   const optimizingPrompt = ref(false);
@@ -112,9 +118,12 @@ export function useSubmit(opts: {
     return null;
   }
 
+  // ensureRefsForProvider 已抽到 useEnsureRefs.ts（useImageSubmit 共用同一套补传逻辑）
+
   // ---------- 提交生成 ----------
   async function submitGenerate() {
-    if (!shared.apiKey.value) return;
+    const apiKey = shared.apiKey.value;
+    if (!apiKey) return;
     const owner = await resolveSubmitOwner();
     if (!owner || !owner.path) {
       opts.showToast("无活动 PR 项目，无法记录生成历史");
@@ -145,6 +154,17 @@ export function useSubmit(opts: {
         `已跳过 ${skipped} 张「✏ PS 中」的参考素材，请先点「修改完成」再生成`,
       );
     }
+    // fileId 与 provider 绑定：换 provider 提交时现场补传，失败/未上传的跳过
+    const ensured = await ensureRefsForProvider(
+      refsForSubmit,
+      opts.currentProviderId.value,
+    );
+    if (ensured.skipped > 0) {
+      opts.showToast(
+        `已跳过 ${ensured.skipped} 条参考素材（未上传完成或换 provider 后补传失败）`,
+      );
+    }
+    const refsReady = ensured.refs;
     const newRec: GenerationRecord = {
       id,
       createdAt: now,
@@ -156,7 +176,7 @@ export function useSubmit(opts: {
         resolution: shared.resolution.value,
         provider: opts.currentProviderId.value,
       },
-      references: [...refsForSubmit],
+      references: [...refsReady],
       status: "pending",
       submittedAt: now,
       // 归属标记:抓素材时锁定(纯文生视频为点击瞬间的实时活动工程),
@@ -182,7 +202,19 @@ export function useSubmit(opts: {
       shared.ratio.value = "16:9";
     }
 
-    const mini = new MiniMaxProvider();
+    // 走 registry 取当前 provider（不再硬编码 MiniMax 实例）
+    const provider = await getProvider(opts.currentProviderId.value);
+    if (!provider) {
+      const idx = shared.records.value.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
+          status: "failed",
+          error: { message: `provider "${opts.currentProviderId.value}" 未注册` },
+        };
+      }
+      return;
+    }
     const reqPayload: VideoGenCreateRequest = {
       model: shared.model.value,
       prompt: newRec.prompt,
@@ -219,7 +251,7 @@ export function useSubmit(opts: {
     } else {
       // 实发模式:用 safeProviderCall 把 throw 转 {ok, error},失败直接写 record.error
       const r = await safeProviderCall(() =>
-        mini.createVideo(reqPayload, shared.apiKey.value),
+        provider.createVideo(reqPayload, apiKey),
       );
       if (!r.ok) {
         const idx = shared.records.value.findIndex((rec) => rec.id === id);
@@ -265,6 +297,9 @@ export function useSubmit(opts: {
       opts.showToast("仅对已生成 / 已导入的视频可以升级");
       return;
     }
+    // 局部化窄化值：await 之后 TS 不保留属性窄化，后续统一用局部常量
+    const sourceTaskId = rec.taskId;
+    const apiKey = shared.apiKey.value;
     // 按 provider + model 的 capability 判断(不再硬编码 MiniMax-H3)
     const upgradeModelDesc = opts.findModelDescriptor(
       rec.params.model,
@@ -314,17 +349,31 @@ export function useSubmit(opts: {
       // 归属标记:跟随被升级的原记录。
       // 原记录可能属于其它工程(在飞任务切工程后仍会完成),
       // 此时不应把升级任务记到当前活动工程下。
-      projectGuid: rec.projectGuid ?? shared.projectInfo.value?.guid,
-      projectPath: rec.projectPath ?? shared.projectInfo.value?.path,
+      projectGuid: rec.projectGuid ?? shared.projectInfo.value?.guid ?? "",
+      projectPath: rec.projectPath ?? shared.projectInfo.value?.path ?? "",
     };
     shared.records.value.unshift(upgradeRec);
 
-    const mini = new MiniMaxProvider();
+    // 走 registry：像素提升锁定到原记录提交时的 provider
+    const provider = await getProvider(
+      rec.params.provider || opts.currentProviderId.value,
+    );
+    if (!provider?.regenerateVideo) {
+      const idx = shared.records.value.findIndex((rec2) => rec2.id === id);
+      if (idx >= 0) {
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
+          status: "failed",
+          error: { message: "该 provider 未注册或不支持像素提升" },
+        };
+      }
+      return;
+    }
     const r = await safeProviderCall(() =>
-      mini.regenerateVideo!({
-        sourceTaskId: rec.taskId,
+      provider.regenerateVideo!({
+        sourceTaskId,
         resolution: "2K",
-        apiKey: shared.apiKey.value,
+        apiKey,
       }),
     );
     if (!r.ok) {
@@ -361,7 +410,8 @@ export function useSubmit(opts: {
    * - 复用现有 usePolling,与视频生成的轮询代码路径同源(共享 polling_ 实例与在飞登记表)
    */
   async function optimizePrompt() {
-    if (!shared.apiKey.value) {
+    const apiKey = shared.apiKey.value;
+    if (!apiKey) {
       opts.showToast("请先在设置里填写 API Key");
       return;
     }
@@ -407,8 +457,13 @@ export function useSubmit(opts: {
       }
     }
 
-    // 仅取已上传成功的 references(有 fileId 的)
-    const validRefs = shared.references.value.filter((r) => !!r.fileId);
+    // 仅取已上传成功的 references(有 fileId 的)；fileId 与 provider 绑定，
+    // 换 provider 提交时现场补传，失败/未上传的静默跳过(与原过滤行为一致)
+    const ensuredOpt = await ensureRefsForProvider(
+      shared.references.value.filter((r) => !!r.fileId),
+      opts.currentProviderId.value,
+    );
+    const validRefs = ensuredOpt.refs;
     // 与 createVideo 保持一致:无 references 时 ratio=adaptive 不合法
     const ratioArg: VideoRatio =
       validRefs.length === 0 && shared.ratio.value === "adaptive"
@@ -443,14 +498,19 @@ export function useSubmit(opts: {
       projectPath: owner?.path,
     };
 
-    const mini = new MiniMaxProvider();
+    // 走 registry 取当前 provider（不再硬编码 MiniMax 实例）
+    const provider = await getProvider(opts.currentProviderId.value);
+    if (!provider?.submitOptimizePrompt) {
+      opts.showToast("当前 provider 未注册或不支持提示词优化");
+      return;
+    }
     const r = await safeProviderCall(() =>
-      mini.submitOptimizePrompt!({
+      provider.submitOptimizePrompt!({
         prompt: shared.prompt.value,
         duration: shared.duration.value,
         ratio: ratioArg,
         references: validRefs,
-        apiKey: shared.apiKey.value,
+        apiKey,
       }),
     );
     if (!r.ok) {
@@ -471,7 +531,9 @@ export function useSubmit(opts: {
     inflight.set(id, { record: optimizeRunRec, polling: true });
     polling_.start({
       taskId: task_id,
-      apiKey: shared.apiKey.value,
+      // 锁定提交时的 provider
+      providerId: opts.currentProviderId.value,
+      apiKey,
       intervalMs: 3000, // IR 任务通常很快(秒级),3s 轮询体验更好
       onUpdate: (resp) => {
         commitInflight(id, { lastPolledAt: new Date().toISOString() });
