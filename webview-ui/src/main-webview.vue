@@ -311,7 +311,9 @@ onMounted(async () => {
   currentImageProvider.value = getImageProviderSync(DEFAULT_IMAGE_PROVIDER_ID);
   // 异步获取当前 provider 实例
   currentProvider.value = await getProvider(currentProviderId.value);
-  apiKey.value = await bridge.getApiKey();
+  // 按当前视频 provider 读分槽 key(存储层对默认 provider 回落旧单 key);
+  // 不传 providerId 只读旧单 key 槽位,而设置面板保存时只写分槽 → 初始永远读到空
+  apiKey.value = (await bridge.getApiKey(currentProviderId.value)) || "";
   // 获取项目信息
   const pi = await bridge.queryProjectState();
   if (pi.project) {
