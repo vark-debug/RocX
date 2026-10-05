@@ -106,7 +106,7 @@ export interface GenerationRecord {
   imageParams?: {
     width: number;
     height: number;
-    /** 尺寸档位："1K" | "2K"（provider 私有值放 provider 内映射） */
+    /** 计价档位："1K" | "2K"（由输出像素总数 ≤236 万与否算出，见 billingTierOf） */
     resolution: string;
     /** 输出格式："jpeg" | "png" */
     outputFormat: string;
@@ -304,6 +304,9 @@ export interface UxptoWebviewAPI {
       audioTrackCount: number;
     }>;
   }>;
+
+  /** 活动序列分辨率（序列画布原始像素，不缩放）；无项目/序列返回 null */
+  getActiveSequenceSize(): Promise<{ width: number; height: number } | null>;
 
   /** 主动获取最新主题（启动期 / 调色板刷新） */
   getColorScheme(): Promise<{

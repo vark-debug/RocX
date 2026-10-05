@@ -1,9 +1,10 @@
 <script setup lang="ts">
 // ---- 轻量 toast：UXP webview 不可依赖原生 alert ----
-import { ref, computed, onMounted, provide, getCurrentInstance } from "vue";
+import { ref, computed, onMounted, provide, getCurrentInstance, watch } from "vue";
 import * as webviewAPI from "./webview-api";
 import { initWebview } from "./webview-setup";
 import { setBridge, bridge } from "./services/bridge";
+import { ratioToSize, clampToApiMax } from "./providers/runninghub/wireFormat";
 
 import { useGenerationState } from "./composables/useGenerationState";
 import { SharedRefsKey } from "./providers/state";
@@ -104,7 +105,22 @@ const generationMode = ref<GenerationMode>("video");
 const imagePrompt = ref("");
 const imageModel = ref("seedream-v5-pro");
 const imageRatio = ref<ImageRatio>("1:1");
-const imageSize = ref<ImageSize>("1K");
+const imageSize = ref<ImageSize>("智能");
+/** 活动序列分辨率（智能档展示 / 提交兜底用；切到图片生成模式时刷新；超 API 上限的已等比钳制） */
+const imageSeqSize = ref<{ width: number; height: number } | null>(null);
+async function refreshImageSeqSize() {
+  try {
+    const seq = await bridge.getActiveSequenceSize();
+    // 展示层即钳制：标签显示的就是实际会提交的像素（所见即所得）
+    imageSeqSize.value = seq ? clampToApiMax(seq.width, seq.height) : null;
+  } catch {
+    imageSeqSize.value = null;
+  }
+}
+// 点击「图片生成」书签（含重试回填切模式）时刷新一次，而非等展开尺寸 popover
+watch(generationMode, (mode) => {
+  if (mode === "image") void refreshImageSeqSize();
+});
 /** 图片 provider 实例（mount 时注册后取用） */
 const currentImageProvider = ref<import("./providers/core/ImageGenProvider").ImageGenProvider | null>(null);
 const imageModels = computed<ModelDescriptor[]>(() => currentImageProvider.value?.models ?? []);
@@ -437,6 +453,7 @@ async function refreshProject() {
           v-model:size="imageSize"
           :model="imageModel"
           :models="imageModels"
+          :seq-size="imageSeqSize"
           @generate="onImageGenerate"
         />
       </template>

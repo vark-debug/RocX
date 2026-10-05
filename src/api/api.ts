@@ -38,6 +38,11 @@ export const api = {
     return await projectCore.queryProjectState();
   },
 
+  /** 活动序列分辨率（原始像素）；无项目/序列返回 null */
+  async getActiveSequenceSize() {
+    return await projectCore.getActiveSequenceSize();
+  },
+
   async onProjectChanged(
     cb: (p: { path: string; guid: string; name: string } | null) => void,
   ): Promise<() => void> {

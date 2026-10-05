@@ -19,7 +19,7 @@ import {
   getImageProviderSync,
   DEFAULT_IMAGE_PROVIDER_ID,
 } from "../providers/core/registry";
-import { ratioToSize } from "../providers/runninghub/wireFormat";
+import { ratioToSize, billingTierOf, clampToApiMax } from "../providers/runninghub/wireFormat";
 import { resetCaptureContext } from "./useCaptureContext";
 import { safeProviderCall } from "./useProviderSafe";
 import { SharedRefsKey } from "../providers/state";
@@ -35,7 +35,7 @@ export function useImageSubmit(opts: {
   imagePrompt: RefAny<string>;
   /** 宽高比 */
   imageRatio: RefAny<string>;
-  /** 尺寸档位 "1K" | "2K" */
+  /** 尺寸档位 "智能" | "1K" | "2K" */
   imageSize: RefAny<string>;
   /** toast */
   showToast: (msg: string | unknown) => void;
@@ -108,7 +108,33 @@ export function useImageSubmit(opts: {
 
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
-    const size = ratioToSize(opts.imageRatio.value, opts.imageSize.value);
+
+    // 输出像素：智能档 = 提交时实时取活动序列分辨率；预设档 = 比例×档位映射
+    let outWidth: number;
+    let outHeight: number;
+    if (opts.imageSize.value === "智能") {
+      const seq = await bridge.getActiveSequenceSize();
+      if (!seq) {
+        opts.showToast("未能获取活动序列分辨率，请确认当前项目已打开且含活动序列");
+        return;
+      }
+      // 超 API 像素上限（4194304，实测 4K 序列报错）时等比缩放到上限内
+      const clamped = clampToApiMax(seq.width, seq.height);
+      if (clamped.scaled) {
+        opts.showToast(
+          `序列分辨率 ${seq.width}×${seq.height} 超出模型上限，已等比缩放为 ${clamped.width}×${clamped.height}`,
+        );
+      }
+      outWidth = clamped.width;
+      outHeight = clamped.height;
+    } else {
+      const size = ratioToSize(opts.imageRatio.value, opts.imageSize.value);
+      outWidth = size.width;
+      outHeight = size.height;
+    }
+    // 计价档位由输出像素总数决定（≤ 236 万像素 → 1K，否则 2K）
+    const billingTier = billingTierOf(outWidth, outHeight);
+
     const newRec: GenerationRecord = {
       id,
       createdAt: now,
@@ -118,13 +144,13 @@ export function useImageSubmit(opts: {
         model: opts.imageModel.value,
         ratio: opts.imageRatio.value as GenerationRecord["params"]["ratio"],
         duration: 0,
-        resolution: opts.imageSize.value,
+        resolution: billingTier,
         provider: DEFAULT_IMAGE_PROVIDER_ID,
       },
       imageParams: {
-        width: size.width,
-        height: size.height,
-        resolution: opts.imageSize.value,
+        width: outWidth,
+        height: outHeight,
+        resolution: billingTier,
         outputFormat: "png",
       },
       references: imageRefs,
@@ -143,7 +169,8 @@ export function useImageSubmit(opts: {
       model: opts.imageModel.value,
       prompt: newRec.prompt,
       ratio: opts.imageRatio.value,
-      resolution: opts.imageSize.value,
+      width: outWidth,
+      height: outHeight,
       outputFormat: "png",
       count: 1,
       references: imageRefs,

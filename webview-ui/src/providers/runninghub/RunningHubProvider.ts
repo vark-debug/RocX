@@ -7,7 +7,8 @@
  *   元素为 Base64 data URI；外链 download_url / 纯文件名引用均报 1007，实测弃用）
  *
  * wire format（官方示例）：
- * - create: POST { prompt, width, height, resolution: "2k", outputFormat: "jpeg" }
+ * - create: POST { prompt, width, height, outputFormat: "jpeg" }（width/height 为
+ *   Int 直传，不再传 resolution 枚举）
  *   → { taskId, status: "RUNNING", ... }
  * - query:  POST { taskId } → { status: "SUCCESS"|"RUNNING"|"QUEUED"|"FAILED",
  *   results: [{ url, nodeId, outputType }], errorMessage, ... }
@@ -21,7 +22,6 @@ import type {
   VideoGenErrorParsed,
 } from "../core/types";
 import { VideoGenError } from "../core/errors";
-import { ratioToSize, toWireResolution } from "./wireFormat";
 import { parseRunningHubError, friendlyRunningHubError } from "./errorMap";
 
 const TEXT_TO_IMAGE_URL =
@@ -84,13 +84,12 @@ export class RunningHubProvider implements ImageGenProvider {
       });
     }
 
-    const size = ratioToSize(req.ratio, req.resolution);
+    // width/height 由上层算好直传（智能档=序列分辨率 / 预设档=ratioToSize）；
     // 单次仅 1 张（count>1 由上层拆多任务，当前 UI 固定 1）
     const body = {
       prompt: req.prompt,
-      width: size.width,
-      height: size.height,
-      resolution: toWireResolution(req.resolution),
+      width: Math.round(req.width),
+      height: Math.round(req.height),
       outputFormat: req.outputFormat,
       ...(hasReferences ? { imageUrls: dataUris } : {}),
     };

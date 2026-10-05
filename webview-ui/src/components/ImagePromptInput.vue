@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import type { ModelDescriptor } from "../providers/core/types";
+import { describeRatio } from "../providers/runninghub/wireFormat";
 
-/** 图片生成尺寸档位（阶段 2 接入 provider 后由 ModelDescriptor.paramConstraints 驱动） */
-export type ImageSize = "1K" | "2K";
+/** 图片生成尺寸档位；"智能" = 跟随活动序列分辨率（提交时由 UXP 实时获取） */
+export type ImageSize = "1K" | "2K" | "智能";
 /** 图片宽高比 */
 export type ImageRatio = "1:1" | "4:3" | "3:4" | "16:9" | "9:16";
 
@@ -15,6 +16,8 @@ const props = defineProps<{
   models: ModelDescriptor[];
   ratio: ImageRatio;
   size: ImageSize;
+  /** 活动序列分辨率（智能档展示用；null = 未能获取） */
+  seqSize: { width: number; height: number } | null;
 }>();
 
 const emit = defineEmits<{
@@ -25,7 +28,7 @@ const emit = defineEmits<{
 }>();
 
 const ratios: ImageRatio[] = ["1:1", "4:3", "3:4", "16:9", "9:16"];
-const sizes: ImageSize[] = ["1K", "2K"];
+const sizes: ImageSize[] = ["智能", "1K", "2K"];
 
 const paramsPopoverOpen = ref(false);
 
@@ -34,7 +37,17 @@ const currentModelLabel = computed(() => {
   return m ? m.displayName : props.model;
 });
 
+/** 智能档展示文本：带已获取的序列分辨率 */
+const smartLabel = computed(() =>
+  props.seqSize ? `智能 ${props.seqSize.width}×${props.seqSize.height}` : "智能",
+);
+
 const paramsSummary = computed(() => {
+  if (props.size === "智能") {
+    // 智能档：宽高比跟随实际像素推导（选择器里的 ratio 不生效，不展示）
+    if (!props.seqSize) return "智能";
+    return `${describeRatio(props.seqSize.width, props.seqSize.height)}·智能 ${props.seqSize.width}×${props.seqSize.height}`;
+  }
   return `${props.ratio}·${props.size}`;
 });
 
@@ -83,8 +96,8 @@ function onSubmitClick() {
 
       <!-- 图片参数 popover（向上展开：宽高比 / 尺寸 / 张数） -->
       <div v-if="paramsPopoverOpen" class="param-popover params-popover" @click.stop>
-        <div class="popover-group">
-          <div class="group-label">宽高比</div>
+        <div class="popover-group" :class="{ disabled: size === '智能' }">
+          <div class="group-label">宽高比{{ size === "智能" ? "（智能档跟随序列分辨率，不生效）" : "" }}</div>
           <div class="radio-row">
             <label
               v-for="r in ratios"
@@ -96,6 +109,7 @@ function onSubmitClick() {
                 type="radio"
                 :value="r"
                 :checked="ratio === r"
+                :disabled="size === '智能'"
                 @change="emit('update:ratio', r as ImageRatio)"
               />
               <span>{{ r }}</span>
@@ -110,6 +124,7 @@ function onSubmitClick() {
               :key="s"
               class="radio-item"
               :class="{ active: size === s }"
+              :title="s === '智能' ? '跟随当前 PR 序列分辨率' : ''"
             >
               <input
                 type="radio"
@@ -117,7 +132,7 @@ function onSubmitClick() {
                 :checked="size === s"
                 @change="emit('update:size', s as ImageSize)"
               />
-              <span>{{ s }}</span>
+              <span>{{ s === "智能" ? smartLabel : s }}</span>
             </label>
           </div>
         </div>
@@ -218,6 +233,11 @@ function onSubmitClick() {
   margin-bottom: 6px;
   &:last-child {
     margin-bottom: 0;
+  }
+
+  &.disabled {
+    opacity: 0.45;
+    pointer-events: none;
   }
 }
 

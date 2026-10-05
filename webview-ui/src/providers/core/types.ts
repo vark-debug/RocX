@@ -47,9 +47,11 @@ export type VideoGenCapability =
 export interface ImageGenCreateRequest {
   model: string;                 // provider-specific model id，如 "seedream-v5-pro"
   prompt: string;
-  ratio: string;                 // "1:1" | "16:9" 等
-  /** 尺寸档位（如 "1K" | "2K"），provider 内部映射为具体 width/height */
-  resolution: string;
+  ratio: string;                 // "1:1" | "16:9" 等（仅展示/记录用；像素由 width/height 决定）
+  /** 输出像素宽（Int）；智能档 = 活动序列分辨率，预设档 = ratioToSize 映射 */
+  width: number;
+  /** 输出像素高（Int） */
+  height: number;
   /** 输出格式："jpeg" | "png" */
   outputFormat: string;
   /** 张数（阶段 2A 固定 1；RunningHub 单次仅出 1 张） */

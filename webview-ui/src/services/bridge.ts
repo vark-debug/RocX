@@ -18,6 +18,7 @@ const ensure = (): UxptoWebviewAPI => {
 export const bridge = {
   echo: (msg: string) => ensure().echo(msg),
   queryProjectState: () => ensure().queryProjectState(),
+  getActiveSequenceSize: () => ensure().getActiveSequenceSize(),
   getColorScheme: () => ensure().getColorScheme(),
   recordsRead: (target?: { projectGuid?: string; projectPath?: string }) =>
     ensure().recordsRead(target),
