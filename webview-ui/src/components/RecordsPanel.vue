@@ -167,7 +167,11 @@ function selectedIsForeign(): boolean {
           >⬆ 升级</span>
           <span class="meta-model">{{ selected.params.model }}</span>
           <span class="meta-sep">·</span>
-          <span class="meta-param">{{ selected.params.ratio }}</span>
+          <!-- 图片记录展示实际输出像素（智能档时 ratio 与输出无关）；视频仍显示比例 -->
+          <span v-if="selectedIsImage() && selected.imageParams" class="meta-param">
+            {{ selected.imageParams.width }}×{{ selected.imageParams.height }}
+          </span>
+          <span v-else class="meta-param">{{ selected.params.ratio }}</span>
           <template v-if="!selectedIsImage()">
             <span class="meta-sep">·</span>
             <span class="meta-param">{{ selected.params.duration }}s</span>
@@ -180,7 +184,7 @@ function selectedIsForeign(): boolean {
           <span class="status-dot" :style="{ background: statusOf(selected).color }"></span>
           <span class="status-label">{{ statusOf(selected).label }}</span>
           <button
-            v-if="!selectedIsImage() && selected.status === 'failed' && selected.taskId"
+            v-if="selected.status === 'failed' && selected.taskId"
             class="header-btn"
             @click="emitRetrySelected"
             title="重试"
@@ -192,7 +196,7 @@ function selectedIsForeign(): boolean {
       <div class="preview-area">
         <div class="main-video-wrap">
           <video
-            v-if="selected.workFile && videoUrlOf(selected)"
+            v-if="!selectedIsImage() && selected.workFile && videoUrlOf(selected)"
             ref="mainVideoRef"
             :src="videoUrlOf(selected)"
             class="main-video"
@@ -208,16 +212,16 @@ function selectedIsForeign(): boolean {
             @play="isPlaying = true"
             @pause="isPlaying = false"
           />
-          <!-- 图片记录大图预览（无 workFile，直接用 provider resultUrl） -->
+          <!-- 图片记录大图预览：优先本地 workFile（永不过期），回退 resultUrl -->
           <img
-            v-if="selected.kind === 'image' && selected.resultUrl"
-            :src="selected.resultUrl"
+            v-if="selectedIsImage() && (selected.resultUrl || selected.workFile)"
+            :src="videoUrlOf(selected) || selected.resultUrl"
             class="main-image"
             draggable="false"
           />
-          <!-- 中心播放按钮 SVG -->
+          <!-- 中心播放按钮 SVG（仅视频） -->
           <div
-            v-if="!isPlaying && selected.workFile && videoUrlOf(selected)"
+            v-if="!isPlaying && !selectedIsImage() && selected.workFile && videoUrlOf(selected)"
             class="play-overlay"
             @click.stop="togglePlay"
           >
@@ -254,7 +258,7 @@ function selectedIsForeign(): boolean {
               HTTP {{ selected.error.httpStatus }}
             </div>
             <button
-              v-if="!selectedIsImage() && canRetrySelected"
+              v-if="canRetrySelected"
               class="retry-btn"
               @click="emitRetrySelected"
             >↻ 填入生成器</button>
@@ -265,7 +269,7 @@ function selectedIsForeign(): boolean {
       <!-- 底部操作按钮行 -->
       <div class="action-row">
         <button
-          v-if="selected.workFile && (selected.status === 'generated' || selected.status === 'imported' || selected.status === 'failed')"
+          v-if="(selected.workFile || (selectedIsImage() && selected.resultUrl)) && (selected.status === 'generated' || selected.status === 'imported' || selected.status === 'failed')"
           class="action-btn primary"
           @click="emitImportSelected"
           title="仅导入到 PR Project 面板，不插入时间线"
@@ -277,17 +281,16 @@ function selectedIsForeign(): boolean {
           title="调用 video_regeneration 把这条 768P 视频提升到 2K（H3 专用）"
         >⬆ 升级到 2K</button>
         <button
-          v-if="!selectedIsImage()"
           class="action-btn"
           @click="emitRetrySelected"
           title="把这条记录的 prompt / 参数 / 参考素材填回生成器（不自动提交）"
         >↻ 填入生成器</button>
         <span class="action-spacer"></span>
         <button
-          v-if="!selectedIsImage() && (selected.status === 'generated' || selected.status === 'imported')"
+          v-if="selected.status === 'generated' || selected.status === 'imported'"
           class="action-btn reference-btn"
           @click="emitUseAsReference(selected)"
-          title="把这条记录的视频作为参考素材添加到生成器"
+          :title="selectedIsImage() ? '把这张图片作为参考素材添加到生成器' : '把这条记录的视频作为参考素材添加到生成器'"
         >用作参考</button>
       </div>
     </div>

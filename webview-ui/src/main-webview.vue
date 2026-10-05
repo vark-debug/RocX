@@ -227,8 +227,30 @@ const importApi = useImport({
 });
 
 // ---------- 重试 / 删除记录 ----------
-// useRecordEdit 无入参,所有状态通过 inject 拿
-const recordEditApi = useRecordEdit();
+// useRecordEdit 的视频分支走 inject 状态;图片分支经 retryImage 回填顶层图片态
+const recordEditApi = useRecordEdit({
+  retryImage: (rec) => {
+    generationMode.value = "image";
+    imagePrompt.value = rec.prompt;
+    if (rec.params.model) imageModel.value = rec.params.model;
+    if (rec.params.ratio) imageRatio.value = rec.params.ratio as ImageRatio;
+    // params.resolution 现在存的是计价档位（按像素总数算出），不一定等于 UI 档位：
+    // width/height 与某个预设映射吻合 → 回填该档位；否则视为智能档（序列分辨率）
+    const w = rec.imageParams?.width;
+    const h = rec.imageParams?.height;
+    if (w && h) {
+      const matched = (["1K", "2K"] as const).find(
+        (tier) => {
+          const s = ratioToSize(rec.params.ratio, tier);
+          return s.width === w && s.height === h;
+        },
+      );
+      imageSize.value = matched ?? "智能";
+    }
+    // 图生图参考回填（本地 localPath 仍在，重新提交时按 Base64 直传重读）
+    references.value = rec.references;
+  },
+});
 
 // ---------- 参考素材（依赖 state.constraints 做智能填写） ----------
 // useReferences 暂时保持 props 透传(规划 v3 下一期处理;

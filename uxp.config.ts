@@ -116,6 +116,8 @@ const manifest: UXP_Manifest = {
         "https://algeng-video-infer.oss-cn-shanghai.aliyuncs.com",
         // RunningHub 图片 provider：上传 / 创建 / 查询 API（host 侧 binary 上传 + webview 侧 fetch 共用）
         "https://www.runninghub.cn",
+        // RunningHub 生成结果 COS 下载（区域/桶名不固定：ap-beijing/ap-guangzhou 等，通配覆盖）
+        "https://*.myqcloud.com",
         // 飞书多维表格自动化 webhook（租户级子域名，如 xxx.feishu.cn，必须通配）
         "https://*.feishu.cn",
         // 钉钉连接器 webhook（测试用）

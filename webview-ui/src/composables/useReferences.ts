@@ -14,6 +14,7 @@ import { type Ref, ref } from "vue";
 import { bridge } from "../services/bridge";
 import {
   type ReferenceItem,
+  type ReferenceType,
   type FileKind,
   type GenerationRecord,
   type VideoParamConstraints,
@@ -76,27 +77,70 @@ export function useReferences(opts: {
     if (opts.references.value.length === 0) resetCaptureContext();
   }
 
-  // ---------- 工具：把已生成的视频上传为参考 ----------
+  // ---------- 工具：把已生成的结果（视频/图片）上传为参考 ----------
+  /**
+   * 乐观上传：先 push 条目（uploading=true，UI 立即显示"上传中"），后台异步上传。
+   * kind 直接从 rec.kind 派生（不再走 bridge.detectFileKind 的 host 往返）。
+   * 失败只 toast 并把条目留在列表（uploading=false），用户可删除后重试。
+   */
   async function useAsReference(rec: GenerationRecord) {
-    if (!rec.workFile) return;
-    const kind = await bridge.detectFileKind(rec.workFile);
-    if (!kind) {
-      opts.showToast("无法识别文件类型");
+    if (!rec.workFile) {
+      opts.showToast("该记录没有本地文件");
       return;
     }
+    // 归属以记录为准:显式的用户意图,强制重锁到记录所属工程
+    // (旧批次残留的锁、当前活动工程都不算数)。老记录缺归属时不锁,回落现状。
+    if (rec.projectPath) {
+      lockCaptureContext(
+        { projectGuid: rec.projectGuid || "", projectPath: rec.projectPath, projectName: "" },
+        "record",
+        true,
+      );
+    }
+    const kind: FileKind = rec.kind === "image" ? "image" : "video";
+    const refType: ReferenceType = kind === "image" ? "reference_image" : "reference_video";
+    // 上传目标取一次快照：异步上传期间切模式不应导致标记与实际目标不一致
     const uploadPid = opts.resolveUploadProviderId();
-    const r = await bridge.uploadExistingFileAsReference({
+    const reference: ReferenceItem = {
+      type: refType,
       localPath: rec.workFile,
       fileName: rec.workFile.split("/").pop() || "ref.bin",
-      kind,
-      providerId: uploadPid,
-    });
-    if (r.ok && r.reference) {
-      r.reference.uploadProvider = uploadPid;
-      opts.references.value.push(r.reference);
-    } else {
-      opts.showToast(`上传失败: ${r.error}`);
-    }
+      sizeBytes: 0,
+      uploading: true,
+      uploadProvider: uploadPid,
+    };
+    opts.references.value.push(reference);
+    // 拿数组里的 reactive proxy 引用（push 进去的 plain object !== proxy），
+    // 保证 findIndex (===) 找得到且属性赋值触发响应式更新（与 uploadInBackground 同理）
+    const refToUpdate = opts.references.value[opts.references.value.length - 1];
+    bridge
+      .uploadReferenceFile({
+        filePath: refToUpdate.localPath,
+        fileName: refToUpdate.fileName,
+        providerId: uploadPid,
+      })
+      .then((up) => {
+        const idx = opts.references.value.findIndex((x) => x === refToUpdate);
+        if (idx < 0) return; // 上传期间已被删除
+        if (!up.ok || !up.fileId) {
+          console.warn("[webview] reference upload failed:", up.error);
+          refToUpdate.uploading = false;
+          opts.showToast(`参考素材上传失败: ${up.error || "未知错误"}`);
+          return;
+        }
+        refToUpdate.fileId = up.fileId;
+        refToUpdate.uploadProvider = uploadPid;
+        refToUpdate.uploadedAt = up.uploadedAt;
+        refToUpdate.uploading = false;
+      })
+      .catch((e) => {
+        const idx = opts.references.value.findIndex((x) => x === refToUpdate);
+        if (idx >= 0) {
+          refToUpdate.uploading = false;
+        }
+        console.error("[webview] upload threw:", e);
+        opts.showToast(`参考素材上传异常: ${String(e?.message || e)}`);
+      });
   }
 
   // ---------- 工具：gcd / ratio 字符串 / 最接近 ratio 匹配 ----------

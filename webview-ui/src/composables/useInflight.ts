@@ -181,12 +181,30 @@ export function useInflight(opts: {
             return;
           }
           if (isImage) {
-            // 图片:成功只记 resultUrl 供预览(下载/导入在后续阶段)
+            // 图片:成功记 resultUrl 供预览,并立即下载落盘
+            // （导入/用作参考依赖本地文件;RH 结果 URL 仅 24h 有效,落盘越早越好。
+            //   下载失败不标 failed —— 图已生成,预览仍可用,只是暂无 workFile）
             if (resp.status === "succeeded" && resp.content?.url) {
+              const ext =
+                rec.imageParams?.outputFormat === "jpeg"
+                  ? "jpg"
+                  : rec.imageParams?.outputFormat || "png";
+              const dl = await bridge.downloadFile({
+                url: resp.content.url,
+                suggestedName: `${rec.id}.${ext}`,
+                recordId: rec.id,
+              });
+              if (!dl.ok || !dl.localPath) {
+                console.warn(
+                  "[inflight] 图片结果落盘失败（预览仍可用）:",
+                  dl.error,
+                );
+              }
               const done = commitInflight(rec.id, {
                 status: "generated",
                 resultUrl: resp.content.url,
                 usage: resp.usage,
+                ...(dl.ok && dl.localPath ? { workFile: dl.localPath } : {}),
               });
               if (done) opts.onTerminalSuccess?.(done, REPORT_PURPOSE.IMAGE_GEN);
             } else if (resp.status === "succeeded") {

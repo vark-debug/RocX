@@ -20,10 +20,17 @@ import { inject } from "vue";
 import { bridge } from "../services/bridge";
 import { SharedRefsKey } from "../providers/state";
 import type { GenerationRecord, ReferenceItem } from "@shared/messages";
+import { lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 
 const REF_FILE_ID_TTL_MS = 6 * 24 * 3600 * 1000;
 
-export function useRecordEdit() {
+export function useRecordEdit(opts: {
+  /**
+   * 图片记录回填回调（generationMode / imagePrompt 等图片态在 main-webview 顶层持有，
+   * 不在 SharedRefs 里，由调用方注入回填实现）
+   */
+  retryImage?: (rec: GenerationRecord) => void;
+} = {}) {
   const sharedRaw = inject(SharedRefsKey);
   if (!sharedRaw) {
     throw new Error("useRecordEdit requires SharedRefs provider in main-webview");
@@ -33,8 +40,21 @@ export function useRecordEdit() {
 
   /** 重试:把 prompt / params / references 全部填回生成逻辑 UI */
   async function retryRecord(rec: GenerationRecord) {
+    // 归属以记录为准:填入生成器 = 新一批素材的边界。先释放旧批次的锁
+    // (整体替换 references 等价于清空素材),再按记录强制重锁;
+    // 老记录缺归属时不锁,提交时回落当前活动工程(与现状一致)。
+    resetCaptureContext();
+    if (rec.projectPath) {
+      lockCaptureContext(
+        { projectGuid: rec.projectGuid || "", projectPath: rec.projectPath, projectName: "" },
+        "record",
+        true,
+      );
+    }
     if (rec.kind === "image") {
-      // 图片记录的参数与视频 UI 不同,重试回填留待图片提交链路完善
+      // 图片记录参数与视频 UI 不同,回填由 main-webview 注入的实现处理
+      opts.retryImage?.(rec);
+      shared.selectedRecordId.value = rec.id;
       return;
     }
     if (!shared.apiKey.value) return;

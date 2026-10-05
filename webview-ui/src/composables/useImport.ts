@@ -25,6 +25,29 @@ export function useImport(opts: {
   const shared = sharedRaw;
 
   async function importToProject(ids: string[]) {
+    // 图片记录兜底：workFile 缺失但 resultUrl 在（老记录 / 落盘失败场景），先补下载落盘
+    for (const id of ids) {
+      const idx = shared.records.value.findIndex((r) => r.id === id);
+      if (idx < 0) continue;
+      const rec = shared.records.value[idx];
+      if (rec.kind === "image" && !rec.workFile && rec.resultUrl) {
+        const ext =
+          rec.imageParams?.outputFormat === "jpeg"
+            ? "jpg"
+            : rec.imageParams?.outputFormat || "png";
+        const dl = await bridge.downloadFile({
+          url: rec.resultUrl,
+          suggestedName: `${rec.id}.${ext}`,
+          recordId: rec.id,
+        });
+        if (dl.ok && dl.localPath) {
+          shared.records.value[idx] = { ...rec, workFile: dl.localPath };
+        } else {
+          opts.showToast(`结果图下载失败，无法导入: ${dl.error}`);
+          return;
+        }
+      }
+    }
     let r: any;
     try {
       r = await bridge.importToProject({ recordIds: ids });
