@@ -24,6 +24,15 @@ import { lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 
 const REF_FILE_ID_TTL_MS = 6 * 24 * 3600 * 1000;
 
+/**
+ * 已删除记录 id 墓碑（session 级，模块级单例）。
+ *
+ * persistRecords 写盘前会读盘合并（内存 ∪ 盘上独有），删除不能再靠
+ * 「数组里消失 → 覆盖」隐式表达，否则已删记录会被合并逻辑从盘上复活。
+ * deleteRecord 把 id 登记进来，doPersist 合并时排除。
+ */
+export const deletedRecordIds = new Set<string>();
+
 export function useRecordEdit(opts: {
   /**
    * 图片记录回填回调（generationMode / imagePrompt 等图片态在 main-webview 顶层持有，
@@ -124,6 +133,7 @@ export function useRecordEdit(opts: {
 
   /** 从 records 数组中过滤掉指定 id(仅 UI 状态,不影响磁盘) */
   async function deleteRecord(id: string) {
+    deletedRecordIds.add(id);
     shared.records.value = shared.records.value.filter((r) => r.id !== id);
   }
 

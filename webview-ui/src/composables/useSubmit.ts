@@ -40,7 +40,6 @@ declare const __ROCX_DRY_RUN__: boolean;
 type RefAny<T> = { value: T };
 
 export interface UseSubmitInflightApi {
-  inflight: Map<string, { record: GenerationRecord; polling: boolean }>;
   polling_: {
     start: (opts: {
       taskId: string;
@@ -56,6 +55,9 @@ export interface UseSubmitInflightApi {
   resumePolling: (rec: GenerationRecord) => void;
   /** 派生 pollingActive(供 optimizePrompt 防并发) */
   pollingActive: RefAny<boolean>;
+  /** 临时在飞登记(优化占位):不进 records、不落盘 */
+  registerTransient: (rec: GenerationRecord) => void;
+  removeTransient: (recId: string) => void;
 }
 
 export function useSubmit(opts: {
@@ -79,7 +81,7 @@ export function useSubmit(opts: {
   // 窄化别名：const 初始化取 rvalue 的窄化类型，闭包内不再 possibly undefined
   const shared = sharedRaw;
   const { inflightApi } = opts;
-  const { inflight, polling_, commitInflight, resumePolling, pollingActive } = inflightApi;
+  const { polling_, commitInflight, resumePolling, pollingActive, registerTransient, removeTransient } = inflightApi;
   const optimizingPrompt = ref(false);
 
   /**
@@ -520,15 +522,15 @@ export function useSubmit(opts: {
       return;
     }
     const task_id = r.data.taskId;
-    // 不再 unshift 到 shared.records,避免触发 persistRecords 落盘;
-    // 优化任务完成后只用 splice 删占位(已优化老表单也无需记录)。
-    // inflight 登记仍保留,pollingActive / generating 派生信号源。
+    // 临时在飞登记(不进 records 列表、不参与落盘分组):
+    // 优化任务完成后只用 recordPromptOptimization 落盘,pollingActive / generating
+    // 派生信号仍来自 inflight 表。
     const optimizeRunRec: GenerationRecord = {
       ...optimizeRec,
       taskId: task_id,
       status: "generating",
     };
-    inflight.set(id, { record: optimizeRunRec, polling: true });
+    registerTransient(optimizeRunRec);
     polling_.start({
       taskId: task_id,
       // 锁定提交时的 provider
@@ -602,7 +604,7 @@ export function useSubmit(opts: {
           }
           optimizingPrompt.value = false;
         } finally {
-          inflight.delete(id);
+          removeTransient(id);
         }
       },
     });

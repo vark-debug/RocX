@@ -13,7 +13,7 @@
  *
  * 调用方:
  * - main-webview.vue 顶层创建一次 (单例 inflight + polling_)
- * - useGenerationState 通过回调(resumePolling / getInflightRecords)接入
+ * - useGenerationState 通过回调(resumePolling / getPersistableInflightRecords)接入
  * - useSubmit 等 useSubmit 函数接收 polling_ 与 commitInflight 入参数消费
  *
  * 不做:toast / 上报。终端成功的回调由调用方传入 onTerminalSuccess,
@@ -26,8 +26,7 @@ import { DEFAULT_PROVIDER_ID, DEFAULT_IMAGE_PROVIDER_ID } from "../providers/cor
 import { SharedRefsKey } from "../providers/state";
 import { REPORT_PURPOSE } from "@shared/messages";
 import type { GenerationRecord, ReportPurpose } from "@shared/messages";
-
-type RefAny<T> = { value: T };
+import { deletedRecordIds } from "./useRecordEdit";
 
 export interface ProjectInfo {
   path: string;
@@ -55,6 +54,12 @@ export function useInflight(opts: {
    * webhookCore 写出"purpose=整段 server response"的 bug(V2.7 修复)。
    */
   onTerminalSuccess?: (rec: GenerationRecord, purpose?: ReportPurpose) => void;
+  /**
+   * 任务终态 commit 后回调(接线到 persistNow 直通落盘)。
+   * 终态时 inflight 副本已摘除,records 是唯一内存副本,而常规落盘有 200ms 防抖;
+   * 若防抖窗口内发生切工程/刷新(timer 被清),记录将永不落盘 —— 终态必须立即写。
+   */
+  onTerminalCommit?: () => void;
 }) {
   const sharedRaw = inject(SharedRefsKey);
   if (!sharedRaw) {
@@ -82,19 +87,56 @@ export function useInflight(opts: {
     return inflight.get(recordId)?.polling === true;
   }
 
-  /** 对外查询:当前所有在飞任务的记录副本(权威状态) */
+  /**
+   * 「临时在飞」登记表(如提示词优化占位):不进 records 列表、不参与落盘分组。
+   * 与 videoGen 记录走同一 inflight 表(共享 pollingActive 派生),但持久化/UI 语义不同,
+   * 用 id 集合区分,persistRecords / loadRecords 的 keepInflight 一律走
+   * getPersistableInflightRecords() 过滤。
+   */
+  const transientIds = new Set<string>();
+
+  /** 临时在飞登记(优化占位等):只进 inflight,不进 records、不落盘 */
+  function registerTransient(rec: GenerationRecord) {
+    transientIds.add(rec.id);
+    inflight.set(rec.id, { record: rec, polling: true });
+  }
+
+  /** 摘除临时在飞登记(与 registerTransient 成对;普通任务走 inflight.delete 即可) */
+  function removeTransient(recId: string) {
+    transientIds.delete(recId);
+    inflight.delete(recId);
+  }
+
+  /** 对外查询:当前所有在飞任务的记录副本(权威状态,含临时登记) */
   function getInflightRecords(): GenerationRecord[] {
     return Array.from(inflight.values()).map((e) => e.record);
   }
 
+  /** 可落盘的在飞记录副本:剔除临时登记,并惰性清理已结束任务的残留 id */
+  function getPersistableInflightRecords(): GenerationRecord[] {
+    for (const id of Array.from(transientIds)) {
+      if (!inflight.has(id)) transientIds.delete(id);
+    }
+    return getInflightRecords().filter((r) => !transientIds.has(r.id));
+  }
+
   /**
    * 把权威 record 副本同步进 records 数组。
-   * 切工程时 records 数组会被整体替换,旧工程记录可能已不在其中 —— 此时静默跳过,
-   * 权威状态仍保留在 inflight 里,不会丢。
+   * 记录不在 records 时(典型:切工程整体替换,该任务还没写进磁盘,
+   * fromDisk 与 keepInflight 都不含它)补插回去 —— 否则权威副本只留在 inflight,
+   * UI 看不见、persistRecords 的分组(shared.records)也读不到,
+   * 任务完成后记录凭空蒸发、永不落盘。
+   * 临时登记(优化占位)仍按设计不进 records;无归属路径的记录无法路由落盘,同样跳过。
    */
   function syncToRecords(next: GenerationRecord) {
+    // 墓碑排除:已删记录(即使仍在轮询)不补插回 records,否则删除后被复活
+    if (deletedRecordIds.has(next.id)) return;
     const idx = shared.records.value.findIndex((r) => r.id === next.id);
-    if (idx < 0) return;
+    if (idx < 0) {
+      if (transientIds.has(next.id) || !next.projectPath) return;
+      shared.records.value.unshift(next);
+      return;
+    }
     const cur = shared.records.value[idx];
     // 同一 id 但归属工程不一致:防御性判断,避免误改别的工程的记录
     if (
@@ -144,16 +186,18 @@ export function useInflight(opts: {
       ? await bridge.getApiKey(rec.params.provider || DEFAULT_IMAGE_PROVIDER_ID)
       : shared.apiKey.value;
     if (!apiKey) {
-      if (isImage) {
-        // 先 commit(同步进 records)再从在飞表摘除
-        commitInflight(rec.id, {
-          status: "failed",
-          error: { message: "RunningHub API Key 缺失，无法查询任务状态" },
-        });
+        if (isImage) {
+          // 先 commit(同步进 records)再从在飞表摘除
+          commitInflight(rec.id, {
+            status: "failed",
+            error: { message: "RunningHub API Key 缺失，无法查询任务状态" },
+          });
+        }
+        inflight.delete(rec.id);
+        // 终态(失败)同样直通落盘,避免防抖窗口内刷新丢记录
+        opts.onTerminalCommit?.();
+        return;
       }
-      inflight.delete(rec.id);
-      return;
-    }
 
     const startOpts: PollingStartOpts = {
       taskId: rec.taskId,
@@ -271,6 +315,8 @@ export function useInflight(opts: {
           }
         } finally {
           inflight.delete(rec.id);
+          // 终态直通落盘:records 是该记录唯一内存副本,必须抢在防抖窗口前写盘
+          opts.onTerminalCommit?.();
           // 本任务结束:把其余还处于 generating 的记录(可能属于别的工程)恢复轮询
           resumeNextGenerating();
         }
@@ -322,6 +368,11 @@ export function useInflight(opts: {
     belongsTo,
     isPolling,
     getInflightRecords,
+    /** 可落盘子集(剔除优化占位等临时登记) */
+    getPersistableInflightRecords,
+    /** 临时在飞登记(不进 records、不落盘) */
+    registerTransient,
+    removeTransient,
     commitInflight,
     syncToRecords,
     /** 轮询管理 */

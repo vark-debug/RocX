@@ -16,6 +16,7 @@ import * as webviewAPI from "../webview-api";
 import { bridge } from "../services/bridge";
 import { DEFAULT_PROVIDER_ID } from "../providers/core/registry";
 import { SharedRefsKey } from "../providers/state";
+import { deletedRecordIds } from "./useRecordEdit";
 import {
   VIDEO_PARAM_CONSTRAINTS,
   type GenerationRecord,
@@ -32,8 +33,14 @@ export function useGenerationState(opts: {
   storageMode: RefAny<"primary" | "fallback">;
   /** 故障恢复时，扫描到 generating 记录就调它 */
   resumePolling: (rec: GenerationRecord) => void;
-  /** 取当前所有在飞任务的 record 副本（权威状态），用于切工程时保留非本工程在飞任务 */
-  getInflightRecords: () => GenerationRecord[];
+  /**
+   * 取当前所有「可落盘」的在飞任务 record 副本（权威状态，已剔除优化占位等临时登记）。
+   * 用途：
+   * - 切工程时保留非本工程在飞任务（keepInflight）
+   * - persistRecords 分组时并入落盘数据源（records 被整体替换后，
+   *   还没写进磁盘的在飞任务从这里补齐，保证权威状态始终落盘）
+   */
+  getPersistableInflightRecords: () => GenerationRecord[];
 }) {
   const sharedRaw = inject(SharedRefsKey);
   if (!sharedRaw) {
@@ -88,6 +95,10 @@ export function useGenerationState(opts: {
    * 「当前面板该显示哪个工程的记录」，两者语义本就不同。
    * 切换事件的 payload 在多工程同进程下不可靠（实测出现过事件报 B、
    * 而 getActiveProject() 报 A），因此只把它当作「需要重新加载」的信号。
+   *
+   * 归属收养（adoption）：从磁盘读出的 records / 优化历史一律重打为当前工程
+   * 的 guid/path —— guid 在拷贝/另存为副本后会变，不能做跨位置锚点；收养让
+   * 「整个项目目录拷给别人 → 打开即见全部生成记录」成立（详见 fromDisk 注释）。
    */
   async function loadRecords() {
     const live = await bridge.queryProjectState();
@@ -127,15 +138,22 @@ export function useGenerationState(opts: {
           const { pendingUpload: _ignored, ...rest } = ref as any;
           return rest;
         }),
-        // 归属字段补齐：历史 record 没有 projectGuid/projectPath，用外层同名字段兜底
-        projectGuid: rec.projectGuid ?? data.projectGuid,
-        projectPath: rec.projectPath ?? data.projectPath,
+        // 归属收养（adoption）：磁盘读出的记录一律重打为当前工程的 guid/path。
+        // PR 的 project.guid 在「另存为副本 / 拷贝 .prproj 到其它目录」后会变化
+        // （实测），guid 不能作跨位置的身份锚点；读取路由本就按「同目录 + 同名
+        // JSON」命中（宿主侧不校验 guid）。收养后，整个项目目录拷贝给别人，
+        // 打开即拥有全部生成记录：◈ 角标 / generatedCount / 故障恢复 /
+        // keepInflight / syncToRecords 防御 / 落盘分组全部随新归属自洽。
+        // 幂等：guid 一致时重打为相同值（无操作）；不一致时（拷贝/接收）统一
+        // 改为当前工程，下一次 persist 把整个 JSON 收敛为接收者的归属。
+        projectGuid: cur.guid,
+        projectPath: cur.path,
       }));
       // 保留「不属于当前工程、但仍在轮询」的在飞任务：
       // inflight 里的 record 副本是权威状态，不能被磁盘数据覆盖，
       // 否则切工程时在飞任务从数组消失 → 轮询回调找不到落点 → 永久卡在 generating。
       // 其它工程的已完成记录不保留：切回该工程时从它自己的 JSON 重新读取。
-      const keepInflight = opts.getInflightRecords().filter((rec) => {
+      const keepInflight = opts.getPersistableInflightRecords().filter((rec) => {
         if (cur.guid) return rec.projectGuid !== cur.guid;
         return rec.projectPath !== cur.path;
       });
@@ -152,7 +170,14 @@ export function useGenerationState(opts: {
       );
       promptOptimizations.value = [
         ...fromOtherProjects,
-        ...(data.promptOptimizations ?? []),
+        // 归属收养：与 records 同语义，磁盘读出的优化历史重打为当前工程。
+        // 否则拷贝目录后 persist 会把它们按旧绝对路径分组，在新机器上写出
+        // 指向不存在目录的幽灵组（primary 失败 → 落到 fallback path-hash）。
+        ...(data.promptOptimizations ?? []).map((o) => ({
+          ...o,
+          projectGuid: cur.guid,
+          projectPath: cur.path,
+        })),
       ];
       // 故障恢复：只对本工程的 generating 记录恢复轮询（resumePolling 内部有防重复判断）
       for (const rec of shared.records.value) {
@@ -172,7 +197,7 @@ export function useGenerationState(opts: {
         shared.projectInfo.value = null;
       }
       const cur = shared.projectInfo.value;
-      const keepInflight = opts.getInflightRecords().filter((rec) => {
+      const keepInflight = opts.getPersistableInflightRecords().filter((rec) => {
         if (!cur) return true;
         if (cur.guid) return rec.projectGuid !== cur.guid;
         return rec.projectPath !== cur.path;
@@ -182,79 +207,160 @@ export function useGenerationState(opts: {
   }
 
   let writeTimer: any = null;
-  async function persistRecords() {
-    // 防抖
+  /** doPersist 重入保护:并行任务连续终态时,前一次写盘(含逐组 await)可能未结束 */
+  let persistRunning = false;
+  function schedulePersist(delay = 200) {
     if (writeTimer) clearTimeout(writeTimer);
-    writeTimer = setTimeout(async () => {
+    writeTimer = setTimeout(() => {
       writeTimer = null;
-      // 切工程加载期间不落盘：records 此刻是加载中间态
-      if (switching.value) return;
-      // 按归属工程分组：多工程并行时每组单独写一个 JSON，
-      // 否则会把所有工程的记录混进「当前活动工程」的文件里。
-      // 优化历史与 records 同盘同路由，按各自自带的归属入组。
-      const groups = new Map<
-        string,
-        {
-          projectGuid: string;
-          projectPath: string;
-          records: GenerationRecord[];
-          optimizations: PromptOptimization[];
-        }
-      >();
-      const cur = shared.projectInfo.value;
-      const ensureGroup = (guid: string, path: string) => {
-        const key = guid || path;
-        let g = groups.get(key);
-        if (!g) {
-          g = { projectGuid: guid, projectPath: path, records: [], optimizations: [] };
-          groups.set(key, g);
-        }
-        return g;
-      };
-      for (const r of shared.records.value) {
-        // 缺归属字段的历史记录归入当前工程（与读取时的补齐逻辑一致）
-        const guid = r.projectGuid ?? cur?.guid ?? "";
-        const path = r.projectPath ?? cur?.path ?? "";
-        // 无路径归属：无法路由落盘，跳过
-        if (!path) continue;
-        ensureGroup(guid, path).records.push(r);
+      void doPersist();
+    }, delay);
+  }
+  async function doPersist() {
+    // 重入保护:上一次写盘未结束时,顺延调度而不是并发读写同一批 JSON
+    if (persistRunning) {
+      schedulePersist(300);
+      return;
+    }
+    persistRunning = true;
+    try {
+      await doPersistInner();
+    } finally {
+      persistRunning = false;
+    }
+  }
+  async function doPersistInner() {
+    // 切工程加载期间 records 此刻是加载中间态，不能落盘；
+    // 但不能丢弃这次写入 —— 延后重试（冻结窗口内的变更原实现会被永久吞掉）。
+    if (switching.value) {
+      schedulePersist(300);
+      return;
+    }
+    // 按归属工程分组：多工程并行时每组单独写一个 JSON，
+    // 否则会把所有工程的记录混进「当前活动工程」的文件里。
+    // 优化历史与 records 同盘同路由，按各自自带的归属入组。
+    const groups = new Map<
+      string,
+      {
+        projectGuid: string;
+        projectPath: string;
+        records: GenerationRecord[];
+        optimizations: PromptOptimization[];
       }
-      for (const opt of promptOptimizations.value) {
-        // 优化历史同样按自身归属入组：归属在优化完成那刻已由 CaptureContext 锁定，
-        // 之后切工程不会改变它。缺归属的旧数据归入当前工程。
-        const guid = opt.projectGuid ?? cur?.guid ?? "";
-        const path = opt.projectPath ?? cur?.path ?? "";
-        if (!path) continue;
-        ensureGroup(guid, path).optimizations.push(opt);
+    >();
+    const cur = shared.projectInfo.value;
+    const ensureGroup = (guid: string, path: string) => {
+      const key = guid || path;
+      let g = groups.get(key);
+      if (!g) {
+        g = { projectGuid: guid, projectPath: path, records: [], optimizations: [] };
+        groups.set(key, g);
       }
-      // 逐组写入；storageMode 只回写「当前工程」那一组的状态
-      console.log(
-        `[gen][persist] 分组数=${groups.size} currentGuid=${cur?.guid ?? "-"} currentPath=${cur?.path ?? "-"}`,
-        [...groups.values()].map((g) => ({
-          guid: g.projectGuid || "-",
-          path: g.projectPath,
-          count: g.records.length,
-          promptOpts: g.optimizations.length,
-        })),
-      );
-      for (const g of groups.values()) {
-        // promptOptimizations 与 records 同盘、同路由：
-        // 每组只写自己归属的优化历史，不会把别的工程的历史覆盖成空数组。
-        const data: ProjectRecords = {
-          projectGuid: g.projectGuid,
-          projectPath: g.projectPath,
-          records: g.records,
-          storageMode: opts.storageMode.value,
-          promptOptimizations: g.optimizations,
-        };
-        const w = await bridge.recordsWrite(data);
-        console.log(
-          `[gen][persist] 写入完成 path=${g.projectPath} count=${g.records.length} promptOpts=${g.optimizations.length} ok=${w.ok} mode=${w.storageMode ?? "-"} err=${w.error ?? "-"}`,
+      return g;
+    };
+    // 落盘数据源 = records + inflight 权威副本（按 id 去重补齐）：
+    // 切工程时 records 被整体替换（fromDisk + keepInflight），还没写进磁盘的
+    // 在飞任务可能两个来源都不含 —— 此前它只留在 inflight，落盘层读不到，
+    // 任务完成后凭空蒸发。这里从 inflight 补齐，保证权威状态始终落盘。
+    const known = new Set(shared.records.value.map((r) => r.id));
+    const inflightExtras = opts
+      .getPersistableInflightRecords()
+      .filter((r) => !known.has(r.id));
+    for (const r of [...shared.records.value, ...inflightExtras]) {
+      // 墓碑排除:已删记录(即使仍在飞)不再入组,否则合并时会复活
+      if (deletedRecordIds.has(r.id)) continue;
+      // 缺归属字段的历史记录归入当前工程（与读取时的补齐逻辑一致）
+      const guid = r.projectGuid ?? cur?.guid ?? "";
+      const path = r.projectPath ?? cur?.path ?? "";
+      // 无路径归属：无法路由落盘，跳过
+      if (!path) continue;
+      ensureGroup(guid, path).records.push(r);
+    }
+    for (const opt of promptOptimizations.value) {
+      // 优化历史同样按自身归属入组：归属在优化完成那刻已由 CaptureContext 锁定，
+      // 之后切工程不会改变它。缺归属的旧数据归入当前工程。
+      const guid = opt.projectGuid ?? cur?.guid ?? "";
+      const path = opt.projectPath ?? cur?.path ?? "";
+      if (!path) continue;
+      ensureGroup(guid, path).optimizations.push(opt);
+    }
+    // 逐组写入；storageMode 只回写「当前工程」那一组的状态
+    console.log(
+      `[gen][persist] 分组数=${groups.size} currentGuid=${cur?.guid ?? "-"} currentPath=${cur?.path ?? "-"}`,
+      [...groups.values()].map((g) => ({
+        guid: g.projectGuid || "-",
+        path: g.projectPath,
+        count: g.records.length,
+        promptOpts: g.optimizations.length,
+      })),
+    );
+    for (const g of groups.values()) {
+      // ---- 写前合并（防回退的核心）----
+      // 内存对非活动工程只有 inflight 子集（loadRecords 切工程时故意不保留
+      // 其它工程的已完成记录），若按内存全量覆盖，会把盘上该工程的已完成
+      // 记录抹掉（JSON 回退）。因此每组写盘前先读盘上现有内容做并集：
+      // - 内存有的以内存为准（轮询推进的最新状态）
+      // - 仅盘上有的保留（切工程丢掉的、其它会话写入的）
+      // - 命中墓碑的盘上记录排除（deleteRecord 的显式删除语义）
+      // 读盘失败（非"文件不存在"）时保守跳过该组：宁可不写也不能盲覆盖。
+      const disk = await bridge.recordsRead({ projectPath: g.projectPath });
+      if (!disk.ok) {
+        console.warn(
+          `[gen][persist] 跳过写入（读盘失败，避免盲覆盖） path=${g.projectPath} err=${disk.error ?? "-"}`,
         );
-        // 注意:写盘后不再用 w.storageMode 覆盖 opts.storageMode —— 该 ref 由实时
-        // probePrimary() 驱动(mount + onProjectChanged),保证 UI 与当前可写性一致。
+        continue;
       }
-    }, 200);
+      const diskData = disk.data;
+      const memIds = new Set(g.records.map((r) => r.id));
+      const diskOnly = (diskData?.records ?? []).filter(
+        (r) => !memIds.has(r.id) && !deletedRecordIds.has(r.id),
+      );
+      const mergedRecords = [...g.records, ...diskOnly];
+      const optKey = (o: PromptOptimization) =>
+        `${o.createdAt}|${o.originalPrompt}`;
+      const memOptKeys = new Set(g.optimizations.map(optKey));
+      const mergedOpts = [
+        ...g.optimizations,
+        ...(diskData?.promptOptimizations ?? []).filter(
+          (o) => !memOptKeys.has(optKey(o)),
+        ),
+      ];
+      // promptOptimizations 与 records 同盘、同路由：
+      // 每组只写自己归属的优化历史，不会把别的工程的历史覆盖成空数组。
+      const data: ProjectRecords = {
+        projectGuid: g.projectGuid,
+        projectPath: g.projectPath,
+        records: mergedRecords,
+        storageMode: opts.storageMode.value,
+        promptOptimizations: mergedOpts,
+      };
+      const w = await bridge.recordsWrite(data);
+      console.log(
+        `[gen][persist] 写入完成 path=${g.projectPath} count=${mergedRecords.length}(mem=${g.records.length}+disk=${diskOnly.length}) promptOpts=${mergedOpts.length} ok=${w.ok} mode=${w.storageMode ?? "-"} err=${w.error ?? "-"}`,
+      );
+      // 注意:写盘后不再用 w.storageMode 覆盖 opts.storageMode —— 该 ref 由实时
+      // probePrimary() 驱动(mount + onProjectChanged),保证 UI 与当前可写性一致。
+    }
+  }
+
+  /** 落盘入口（200ms 防抖）：由 records / promptOptimizations 的 deep watch 触发 */
+  function persistRecords() {
+    schedulePersist(200);
+  }
+
+  /**
+   * 终态直通落盘:跳过 200ms 防抖立即写盘。
+   * 任务终态时 inflight 副本已被摘除,records 是唯一内存副本;若此刻恰逢
+   * 切工程/刷新(reloadRecords 会清防抖 timer),这次写入被取消且记录从
+   * 内存消失 → 永不落盘。所以终态 commit 后必须由 useInflight 回调此函数,
+   * 在防抖窗口开启前就把终态写进磁盘。
+   */
+  function persistNow() {
+    if (writeTimer) {
+      clearTimeout(writeTimer);
+      writeTimer = null;
+    }
+    void doPersist();
   }
 
   watch(
@@ -309,6 +415,8 @@ export function useGenerationState(opts: {
     reloadRecords,
     persistRecords,
     recordPromptOptimization,
+    /** 终态直通落盘(跳过防抖,useInflight onTerminal 回调) */
+    persistNow,
     promptOptimizations,
   };
 }

@@ -172,18 +172,20 @@ const feishuApi = useFeishuReport({ showToast });
 // 只暴露 onTerminalSuccess(顶层需要指定飞书上报回调)
 const inflightApi = useInflight({
   onTerminalSuccess: feishuApi.reportToFeishu,
+  // 终态直通落盘:闭包延迟解引用,调用时 state 必已初始化
+  onTerminalCommit: () => state.persistNow(),
 });
 
 // ---------- 全局状态（依赖 inflightApi.resumePolling 做故障恢复） ----------
 // useGenerationState 内部通过 inject 拿 10 个高频 ref;
-// 只暴露 storageMode(不入 SharedRefs) + resumePolling/getInflightRecords +
+// 只暴露 storageMode(不入 SharedRefs) + resumePolling/getPersistableInflightRecords +
 // recordPromptOptimization(optimizePrompt 落盘写入)
 // ⚠ 必须在 useSubmit 之前声明 —— useSubmit 入参里要引用 state.recordPromptOptimization,
 // const 没 hoisting,提前访问会 TDZ。
 const state = useGenerationState({
   storageMode,
   resumePolling: inflightApi.resumePolling,
-  getInflightRecords: inflightApi.getInflightRecords,
+  getPersistableInflightRecords: inflightApi.getPersistableInflightRecords,
 });
 
 // ---------- 提交 / 升级 / 优化提示词(消费 inflightApi / state) ----------
@@ -196,11 +198,12 @@ const submitApi = useSubmit({
   findModelDescriptor,
   showToast,
   inflightApi: {
-    inflight: inflightApi.inflight as any,
     polling_: inflightApi.polling_,
     commitInflight: inflightApi.commitInflight,
     resumePolling: inflightApi.resumePolling,
     pollingActive: inflightApi.pollingActive as any,
+    registerTransient: inflightApi.registerTransient,
+    removeTransient: inflightApi.removeTransient,
   },
   reportToFeishu: feishuApi.reportToFeishu,
   recordPromptOptimization: state.recordPromptOptimization,
