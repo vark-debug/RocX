@@ -527,6 +527,9 @@ export interface UxptoWebviewAPI {
     reference?: ReferenceItem;
     /** 抓取瞬间的工程归属；无活动工程时为 null */
     owner?: CaptureOwner | null;
+    /** 序列帧尺寸（用于 webview 智能填写画面比例） */
+    width?: number;
+    height?: number;
     error?: string;
   }>;
 

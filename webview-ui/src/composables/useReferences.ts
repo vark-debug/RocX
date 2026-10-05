@@ -40,6 +40,8 @@ export function useReferences(opts: {
   resolveUploadProviderId: () => string;
   /** 查找 model descriptor（用于按 provider 中性查找合法 ratio 列表） */
   findModelDescriptor: (modelId: string, providerId?: string) => ModelDescriptor | null;
+  /** 当前是否视频生成模式（抓帧只在视频模式下智能填写比例，避免误写视频表单） */
+  isVideoMode: () => boolean;
   /** toast */
   showToast: (msg: string | unknown) => void;
 }) {
@@ -188,6 +190,38 @@ export function useReferences(opts: {
     return best?.ratio ?? null;
   }
 
+  /**
+   * 智能填写画面比例：按素材宽高比与当前模型合法 ratio 列表匹配最近档。
+   * 抓视频 / 抓帧两条路径共享；成功写入返回 true。
+   * - 优先从当前 model descriptor 拿合法 ratio（provider 中性、Task 5 后的权威来源）；
+   *   fallback 到 VIDEO_PARAM_CONSTRAINTS 向后兼容（v2 V1.1 前是 MINIMAX_*）
+   * - 与"adaptive"不比较（adaptive 不是具体比值）
+   */
+  function applySmartRatio(width: number, height: number): boolean {
+    const actual = ratioStringFromSize(width, height);
+    if (!actual) return false;
+    const currentModel = opts.findModelDescriptor(
+      opts.getModelId(),
+      opts.currentProviderId.value,
+    );
+    const validRatios =
+      currentModel?.paramConstraints?.ratios ?? opts.constraints.value?.ratios;
+    if (!Array.isArray(validRatios)) {
+      console.warn(
+        `[webview] skip ratio auto-fill: no valid ratios list for model=${opts.getModelId()}`,
+      );
+      return false;
+    }
+    const closest = pickClosestRatio(actual, validRatios);
+    if (closest && opts.ratio.value !== closest) {
+      opts.ratio.value = closest;
+      console.log(
+        `[webview] auto-filled ratio=${closest} from source ${width}x${height} (${actual})`,
+      );
+    }
+    return true;
+  }
+
   // ---------- 内部：后台上传参考素材（共享给 captureFrame / captureVideo） ----------
   /**
    * 把 references 数组中最新 push 的那一条扔到后台做 uploadReferenceFile。
@@ -246,6 +280,20 @@ export function useReferences(opts: {
     // 锁定归属：抓取瞬间的工程身份，first-write-wins
     lockCaptureContext(r.owner);
     opts.references.value.push(r.reference);
+    // 智能填写画面比例（无时长逻辑）：与抓视频同机制，仅视频模式 + 第一个图片参考时生效
+    const isFirstImageRef = opts.references.value
+      .slice(0, -1)
+      .every((x) => x.type !== "reference_image");
+    if (
+      opts.isVideoMode() &&
+      isFirstImageRef &&
+      r.width &&
+      r.height &&
+      r.width > 0 &&
+      r.height > 0
+    ) {
+      applySmartRatio(r.width, r.height);
+    }
     uploadInBackground();
   }
 
@@ -403,30 +451,7 @@ export function useReferences(opts: {
       r.width > 0 &&
       r.height > 0
     ) {
-      const actual = ratioStringFromSize(r.width, r.height);
-      if (actual) {
-        // 优先从当前 model descriptor 拿合法 ratio（provider 中性、Task 5 后的权威来源）；
-        // fallback 到 VIDEO_PARAM_CONSTRAINTS 向后兼容（v2 V1.1 前是 MINIMAX_*）
-        const currentModel = opts.findModelDescriptor(
-          opts.getModelId(),
-          opts.currentProviderId.value,
-        );
-        const validRatios =
-          currentModel?.paramConstraints?.ratios ?? opts.constraints.value?.ratios;
-        if (Array.isArray(validRatios)) {
-          const closest = pickClosestRatio(actual, validRatios);
-          if (closest && opts.ratio.value !== closest) {
-            opts.ratio.value = closest;
-            console.log(
-              `[webview] auto-filled ratio=${closest} from work area ${r.width}x${r.height} (${actual})`,
-            );
-          }
-        } else {
-          console.warn(
-            `[webview] skip ratio auto-fill: no valid ratios list for model=${opts.getModelId()}`,
-          );
-        }
-      }
+      applySmartRatio(r.width, r.height);
     }
     uploadInBackground();
   }

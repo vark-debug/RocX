@@ -35,6 +35,9 @@ export const framesCore = {
     ok: boolean;
     reference?: ReferenceItem;
     owner?: CaptureOwner | null;
+    /** 序列帧尺寸（用于 webview 智能填写画面比例） */
+    width?: number;
+    height?: number;
     error?: string;
   }> {
     console.log("[frames] captureOnlyAsReference start", opts);
@@ -160,7 +163,7 @@ export const framesCore = {
         thumbDataUrl: dataUrl,
         // fileId / uploadedAt 暂不设置，等待后台 upload
       };
-      return { ok: true, reference: ref, owner };
+      return { ok: true, reference: ref, owner, width, height };
     } catch (e: any) {
       console.error("[frames] captureOnly EXCEPTION:", e);
       return { ok: false, error: safeStr((e as any)?.message || e) };

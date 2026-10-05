@@ -271,6 +271,8 @@ const refsApi = useReferences({
       ? DEFAULT_IMAGE_PROVIDER_ID
       : currentProviderId.value,
   findModelDescriptor,
+  // 抓帧只在视频模式下智能填写比例（写 opts.ratio 是视频表单，图片模式不可误写）
+  isVideoMode: () => generationMode.value === "video",
   showToast,
 });
 
