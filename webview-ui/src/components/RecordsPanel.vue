@@ -1,12 +1,18 @@
 <script setup lang="ts">
+import { ref, computed, onMounted, onBeforeUnmount } from "vue";
 import type { GenerationRecord } from "@shared/messages";
 import { useRecordPreview } from "../composables/useRecordPreview";
-import { useRecordActions } from "../composables/useRecordActions";
+import {
+  useRecordActions,
+  isForeignRecord,
+  foreignProjectName,
+} from "../composables/useRecordActions";
+import RecordFeedBlock from "./RecordFeedBlock.vue";
 
 const props = defineProps<{
   records: GenerationRecord[];
   initialSelectedId?: string;
-  /** 正在生成的记录（用于在大视频预览区显示"生成中"卡片） */
+  /** 正在生成的记录（用于生成中卡片显示耗时） */
   generating?: GenerationRecord | null;
   /** 当前活动工程（PR 同进程可打开多个工程，用于判定记录归属） */
   currentProject?: { path: string; guid: string; name?: string } | null;
@@ -20,7 +26,7 @@ const emit = defineEmits<{
   upgrade: [GenerationRecord];
 }>();
 
-// 操作（选中 / 状态展示 / 升级判定 / 拖拽 / 操作发射）
+// 操作（选中 / 播放互斥 / 状态展示 / 升级判定 / 拖拽 / 操作发射）
 const actions = useRecordActions(
   () => props.records,
   props.initialSelectedId,
@@ -33,6 +39,9 @@ const actions = useRecordActions(
     onUseAsReference: (rec) => emit("use-as-reference", rec),
   },
 );
+// 模板用 computed 解包（RefAny 宽松类型无法被模板自动解包）
+const sortedRecords = computed(() => actions.sortedRecords.value);
+const playingId = computed(() => actions.playingId.value);
 
 // 预览（canvas 抽帧 / URL 缓存）
 const preview = useRecordPreview(
@@ -40,262 +49,205 @@ const preview = useRecordPreview(
   () => actions.selectedId.value,
 );
 
-// 解构到顶层 — 让模板自动解包嵌套 ref/computed
-const dragHandlers = actions.bindDragHandlers();
-const {
-  selectedId,
-  selected,
-  isPlaying,
-  togglePlay,
-  pick,
-  statusOf,
-  failedCardClass,
-  failedTitle,
-  errorTypeLabel,
-  canRetrySelected,
-  canUpgradeTo2K,
-  generatingElapsed,
-  sortedRecords,
-  emitImportSelected,
-  emitRetrySelected,
-  emitUpgradeSelected,
-  emitUseAsReference,
-} = actions;
-const {
-  thumbModeOf,
-  thumbUrlOf,
-  videoUrlOf,
-  onVideoError,
-  onThumbError,
-  canvasThumbCache,
-} = preview;
-const mainVideoRef = actions.mainVideoRef;
+// ---------- 信息流滚动容器 ----------
+const feedEl = ref<HTMLElement | null>(null);
+
+// 左侧缩略图高亮：点击时立即切换；滚动时由 IntersectionObserver 反向同步
+const activeThumbId = ref<string | null>(actions.selectedId.value);
+
+// 惰性挂载集合：块进入可视范围（含预载边距）才挂 <video>，离开则卸载回收
+const mountedVideoIds = ref<Set<string>>(new Set());
+
+// 块元素注册表（ref 回调维护）+ 可视比例表（高亮反向同步）
+const blockEls = new Map<string, HTMLElement>();
+const visibleRatios = new Map<string, number>();
+let mountObserver: IntersectionObserver | null = null;
+let activeObserver: IntersectionObserver | null = null;
+
+function registerBlock(id: string, el: unknown) {
+  if (el) {
+    const hel = el as HTMLElement;
+    blockEls.set(id, hel);
+    mountObserver?.observe(hel);
+    activeObserver?.observe(hel);
+  } else {
+    const old = blockEls.get(id);
+    if (old) {
+      mountObserver?.unobserve(old);
+      activeObserver?.unobserve(old);
+      blockEls.delete(id);
+      visibleRatios.delete(id);
+      recomputeActive();
+    }
+  }
+}
+
+/** 高亮反向同步：取当前可视比例最大的块作为 active 缩略图 */
+function recomputeActive() {
+  let bestId = "";
+  let best = 0;
+  visibleRatios.forEach((ratio, id) => {
+    if (ratio > best) {
+      best = ratio;
+      bestId = id;
+    }
+  });
+  if (bestId) activeThumbId.value = bestId;
+}
+
+/** 惰性挂载观察：进入（含 600px 预载边距）→ 挂 <video> 并解析 URL；离开 → 卸载 */
+function onMountIntersect(entries: IntersectionObserverEntry[]) {
+  for (const en of entries) {
+    const id = (en.target as HTMLElement).dataset.recId || "";
+    if (!en.isIntersecting) {
+      if (mountedVideoIds.value.has(id)) {
+        const next = new Set(mountedVideoIds.value);
+        next.delete(id);
+        mountedVideoIds.value = next;
+      }
+      continue;
+    }
+    if (!mountedVideoIds.value.has(id)) {
+      const next = new Set(mountedVideoIds.value);
+      next.add(id);
+      mountedVideoIds.value = next;
+      const rec = props.records.find((r) => r.id === id);
+      if (rec) preview.loadVideoUrl(rec);
+    }
+  }
+}
+
+/** 高亮观察：跟踪每块在真实可视区内的比例 */
+function onActiveIntersect(entries: IntersectionObserverEntry[]) {
+  for (const en of entries) {
+    const id = (en.target as HTMLElement).dataset.recId || "";
+    if (en.isIntersecting) visibleRatios.set(id, en.intersectionRatio);
+    else visibleRatios.delete(id);
+  }
+  recomputeActive();
+}
+
+function ensureObservers() {
+  // 兜底：无 IntersectionObserver 环境直接挂载全部视频（放弃惰性）
+  if (typeof IntersectionObserver === "undefined") {
+    mountedVideoIds.value = new Set(props.records.map((r) => r.id));
+    return;
+  }
+  if (!mountObserver) {
+    mountObserver = new IntersectionObserver(onMountIntersect, {
+      root: feedEl.value || null,
+      rootMargin: "600px 0px",
+    });
+    blockEls.forEach((el) => mountObserver!.observe(el));
+  }
+  if (!activeObserver) {
+    activeObserver = new IntersectionObserver(onActiveIntersect, {
+      root: feedEl.value || null,
+      threshold: [0, 0.2, 0.5, 0.8],
+    });
+    blockEls.forEach((el) => activeObserver!.observe(el));
+  }
+}
+
+onMounted(ensureObservers);
+
+onBeforeUnmount(() => {
+  mountObserver?.disconnect();
+  activeObserver?.disconnect();
+  mountObserver = null;
+  activeObserver = null;
+});
+
+/** 缩略图点击：设置选中 + 平滑滚动到该块首行 */
+function jumpTo(rec: GenerationRecord) {
+  actions.pick(rec);
+  activeThumbId.value = rec.id;
+  const el = blockEls.get(rec.id);
+  const scroller = feedEl.value;
+  if (el && scroller) {
+    scroller.scrollTo({
+      top: Math.max(0, el.offsetTop - 4),
+      behavior: "smooth",
+    });
+  }
+}
+
+function onBlockPlay(id: string) {
+  actions.playingId.value = id;
+}
 
 /** 缩略图 URL：图片记录直接用 provider 返回的 resultUrl，视频记录用 canvas 抽帧 blob */
 function thumbSrcOf(rec: GenerationRecord): string {
   if (rec.kind === "image") return rec.resultUrl || "";
-  return canvasThumbCache.value[rec.id] || "";
-}
-
-/** 当前选中是否为图片记录（控制视频专属 UI 的显隐） */
-function selectedIsImage(): boolean {
-  return selected.value?.kind === "image";
-}
-
-/**
- * 多工程归属提示（PR 同一进程可打开多个工程）：
- * 一个工程的任务在飞时切到另一个工程，这条记录仍会继续轮询并保留在列表里，
- * 但它属于别的工程 —— 界面上需要让用户看出「这条不是当前工程的」。
- */
-
-/** 记录是否属于其它工程（多工程并行时才有意义） */
-function isForeign(rec: GenerationRecord): boolean {
-  const cur = props.currentProject;
-  if (!cur) return false;
-  if (rec.projectGuid && cur.guid) return rec.projectGuid !== cur.guid;
-  if (rec.projectPath && cur.path) return rec.projectPath !== cur.path;
-  return false; // 无归属信息（历史记录）不提示
-}
-
-/** 其它工程的显示名：取 projectPath 的 basename（去掉扩展名） */
-function foreignProjectName(rec: GenerationRecord): string {
-  const base = (rec.projectPath || "").split(/[\\/]/).pop() || "";
-  const dot = base.lastIndexOf(".");
-  const name = dot > 0 ? base.slice(0, dot) : base;
-  return name || "未知工程";
-}
-
-/** 当前选中的记录是否属于其它工程（用于详情区「生成中」卡片提示） */
-function selectedIsForeign(): boolean {
-  return !!selected.value && isForeign(selected.value);
+  return preview.canvasThumbCache.value[rec.id] || "";
 }
 </script>
 
 <template>
   <section v-if="records.length > 0" class="records-panel">
-    <!-- 左列：缩略图（竖向滚动） -->
+    <!-- 左列：缩略图导航（点击快速跳转到对应块首行；active 反向同步当前可视块） -->
     <div class="thumb-column">
       <div
         v-for="rec in sortedRecords"
         :key="rec.id"
-        :class="['thumb-item', { active: rec.id === selectedId }]"
-        @click="pick(rec)"
+        :class="['thumb-item', { active: rec.id === activeThumbId }]"
+        @click="jumpTo(rec)"
         :title="rec.prompt.slice(0, 60)"
       >
         <!-- 优先用 webview 端 canvas 抽帧得到的 blob URL（轻量、立即显示）；图片记录直接用 resultUrl -->
         <img
-          v-if="thumbModeOf(rec) === 'image'"
+          v-if="preview.thumbModeOf(rec) === 'image'"
           :src="thumbSrcOf(rec)"
           class="thumb-image"
           draggable="false"
         />
         <!-- 回退：<video preload="metadata"> 抽帧（canvas 抽帧进行中 / 失败） -->
         <video
-          v-else-if="thumbModeOf(rec) === 'video'"
-          :src="thumbUrlOf(rec)"
+          v-else-if="preview.thumbModeOf(rec) === 'video'"
+          :src="preview.thumbUrlOf(rec)"
           class="thumb-video"
           muted
           preload="metadata"
-          @error="onThumbError(rec)"
+          @error="preview.onThumbError(rec)"
         />
         <div v-else class="thumb-placeholder">
           <span class="thumb-placeholder-icon">{{ rec.status === 'failed' ? '⚠' : (rec.kind === 'image' ? '🖼' : '🎬') }}</span>
         </div>
         <div
           class="thumb-status"
-          :style="{ background: statusOf(rec).color }"
-          :title="statusOf(rec).label"
+          :style="{ background: actions.statusOf(rec).color }"
+          :title="actions.statusOf(rec).label"
         ></div>
         <!-- 其它工程的记录：右上角小角标（pointer-events:none，不影响点击/拖拽） -->
         <span
-          v-if="isForeign(rec)"
+          v-if="isForeignRecord(rec, currentProject)"
           class="foreign-badge"
           :title="`属于其它工程：${foreignProjectName(rec)}`"
         >◈</span>
       </div>
     </div>
 
-    <!-- 右列：详情 -->
-    <div class="detail-column" v-if="selected">
-      <!-- 顶部：参数摘要 + 提示词 + 状态 + 操作（一行；窄屏时隐藏提示词） -->
-      <header class="detail-header">
-        <div class="meta-line">
-          <span
-            v-if="selected.upgradedFromResolution"
-            class="meta-badge upgrade-badge"
-            :title="`由 ${selected.upgradedFromResolution} 升级而来`"
-          >⬆ 升级</span>
-          <span class="meta-model">{{ selected.params.model }}</span>
-          <span class="meta-sep">·</span>
-          <!-- 图片记录展示实际输出像素（智能档时 ratio 与输出无关）；视频仍显示比例 -->
-          <span v-if="selectedIsImage() && selected.imageParams" class="meta-param">
-            {{ selected.imageParams.width }}×{{ selected.imageParams.height }}
-          </span>
-          <span v-else class="meta-param">{{ selected.params.ratio }}</span>
-          <template v-if="!selectedIsImage()">
-            <span class="meta-sep">·</span>
-            <span class="meta-param">{{ selected.params.duration }}s</span>
-          </template>
-          <span class="meta-sep">·</span>
-          <span class="meta-param">{{ selected.params.resolution }}</span>
-          <span class="meta-sep">·</span>
-          <span class="prompt-inline" :title="selected.prompt">{{ selected.prompt }}</span>
-          <span class="meta-spacer"></span>
-          <span class="status-dot" :style="{ background: statusOf(selected).color }"></span>
-          <span class="status-label">{{ statusOf(selected).label }}</span>
-          <button
-            v-if="selected.status === 'failed' && selected.taskId"
-            class="header-btn"
-            @click="emitRetrySelected"
-            title="重试"
-          >↻ 重试</button>
-        </div>
-      </header>
-
-      <!-- 主预览 / 失败信息 -->
-      <div class="preview-area">
-        <div class="main-video-wrap">
-          <video
-            v-if="!selectedIsImage() && selected.workFile && videoUrlOf(selected)"
-            ref="mainVideoRef"
-            :src="videoUrlOf(selected)"
-            class="main-video"
-            preload="metadata"
-            muted
-            playsinline
-            draggable="true"
-            @error="onVideoError(selected)"
-            @click="togglePlay"
-            @dragstart="dragHandlers.onDragStart"
-            @dragover="dragHandlers.onDragOver"
-            @dragend="dragHandlers.onDragEnd"
-            @play="isPlaying = true"
-            @pause="isPlaying = false"
-          />
-          <!-- 图片记录大图预览：优先本地 workFile（永不过期），回退 resultUrl -->
-          <img
-            v-if="selectedIsImage() && (selected.resultUrl || selected.workFile)"
-            :src="videoUrlOf(selected) || selected.resultUrl"
-            class="main-image"
-            draggable="false"
-          />
-          <!-- 中心播放按钮 SVG（仅视频） -->
-          <div
-            v-if="!isPlaying && !selectedIsImage() && selected.workFile && videoUrlOf(selected)"
-            class="play-overlay"
-            @click.stop="togglePlay"
-          >
-            <svg viewBox="0 0 80 80" width="80" height="80">
-              <circle cx="40" cy="40" r="36" fill="rgba(0,0,0,0.55)" stroke="rgba(255,255,255,0.6)" stroke-width="2"/>
-              <polygon points="32,24 32,56 60,40" fill="#fff"/>
-            </svg>
-          </div>
-          <div v-else-if="selected.status === 'generating'" class="failed-card generating-card">
-            <!-- 顶部动态动画条 -->
-            <div class="generating-bar">
-              <div class="generating-bar-fill" />
-            </div>
-            <div class="failed-title">⏳ 生成中 · {{ generatingElapsed }}</div>
-            <div class="failed-msg">{{ selected.prompt }}</div>
-            <div v-if="selected.taskId" class="failed-req">
-              task_id: {{ selected.taskId }}
-            </div>
-            <!-- 多工程：在飞任务属于其它工程（切回该工程后才会看到它的产物） -->
-            <div v-if="selectedIsForeign()" class="foreign-task-hint">
-              ⏳ 该任务属于其它工程「{{ foreignProjectName(selected) }}」，完成后切回该工程查看
-            </div>
-          </div>
-          <div v-else-if="selected.status === 'failed'" class="failed-card" :class="failedCardClass">
-            <div class="failed-title">{{ failedTitle }}</div>
-            <div class="failed-msg">{{ selected.error?.message || '未知错误' }}</div>
-            <div v-if="selected.error?.requestId" class="failed-req">
-              request_id: {{ selected.error.requestId }}
-            </div>
-            <div v-if="selected.error?.errorType" class="failed-type">
-              {{ errorTypeLabel }}
-            </div>
-            <div v-if="selected.error?.httpStatus" class="failed-status">
-              HTTP {{ selected.error.httpStatus }}
-            </div>
-            <button
-              v-if="canRetrySelected"
-              class="retry-btn"
-              @click="emitRetrySelected"
-            >↻ 填入生成器</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- 底部操作按钮行 -->
-      <div class="action-row">
-        <button
-          v-if="(selected.workFile || (selectedIsImage() && selected.resultUrl)) && (selected.status === 'generated' || selected.status === 'imported' || selected.status === 'failed')"
-          class="action-btn primary"
-          @click="emitImportSelected"
-          title="仅导入到 PR Project 面板，不插入时间线"
-        >导入到工程</button>
-        <button
-          v-if="canUpgradeTo2K"
-          class="action-btn upgrade-btn"
-          @click="emitUpgradeSelected"
-          title="调用 video_regeneration 把这条 768P 视频提升到 2K（H3 专用）"
-        >⬆ 升级到 2K</button>
-        <button
-          class="action-btn"
-          @click="emitRetrySelected"
-          title="把这条记录的 prompt / 参数 / 参考素材填回生成器（不自动提交）"
-        >↻ 填入生成器</button>
-        <span class="action-spacer"></span>
-        <button
-          v-if="selected.status === 'generated' || selected.status === 'imported'"
-          class="action-btn reference-btn"
-          @click="emitUseAsReference(selected)"
-          :title="selectedIsImage() ? '把这张图片作为参考素材添加到生成器' : '把这条记录的视频作为参考素材添加到生成器'"
-        >用作参考</button>
+    <!-- 右列：信息流（每条记录一个完整块：meta 行 / 16:9 预览 / 操作行） -->
+    <div ref="feedEl" class="feed-column">
+      <!-- ref 必须挂在原生 div 上：Vue 3 组件 ref 回调拿到的是组件实例而非 DOM，
+           会导致 offsetTop undefined / IntersectionObserver.observe 失败 -->
+      <div
+        v-for="rec in sortedRecords"
+        :key="rec.id"
+        :ref="(el) => registerBlock(rec.id, el)"
+        :data-rec-id="rec.id"
+      >
+        <RecordFeedBlock
+          :rec="rec"
+          :current-project="currentProject"
+          :actions="actions"
+          :preview="preview"
+          :video-mounted="mountedVideoIds.has(rec.id)"
+          :playing-id="playingId"
+          @play="onBlockPlay"
+        />
       </div>
     </div>
-
-    <div v-else class="detail-empty">选择左侧缩略图查看详情</div>
   </section>
 </template>
 

@@ -394,7 +394,7 @@ async function refreshProject() {
       @save="onSettingsSave"
     />
 
-    <!-- 生成记录区：左列缩略图（可滚动）+ 右列详情（生成中/失败/已生成） -->
+    <!-- 生成记录区：左列缩略图导航（点击跳转）+ 右列信息流（每条：meta 行 / 16:9 预览 / 操作行） -->
     <RecordsPanel
       :records="records"
       :generating="inflightApi.generating.value"
