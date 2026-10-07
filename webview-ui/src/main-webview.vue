@@ -331,6 +331,33 @@ onMounted(async () => {
   // 按当前视频 provider 读分槽 key(存储层对默认 provider 回落旧单 key);
   // 不传 providerId 只读旧单 key 槽位,而设置面板保存时只写分槽 → 初始永远读到空
   apiKey.value = (await bridge.getApiKey(currentProviderId.value)) || "";
+  // 图片模型智能默认：仅当只配置了一个图片平台（runninghub/ark）的 key 时，
+  // 默认选中该平台的首个模型；两个都有 key 或都没有则保持默认（runninghub）
+  try {
+    const [rhKey, arkKey] = await Promise.all([
+      bridge.getApiKey("runninghub"),
+      bridge.getApiKey("ark"),
+    ]);
+    const soleProvider =
+      rhKey && !arkKey ? "runninghub" : !rhKey && arkKey ? "ark" : null;
+    if (soleProvider) {
+      const curProvider = listImageProviders().find((p) =>
+        p.models.some((m) => m.modelId === imageModel.value),
+      );
+      const curHasKey =
+        curProvider &&
+        (await bridge.getApiKey(curProvider.providerId)) !== "";
+      // 当前选中模型所属平台没有 key 才切换（避免覆盖用户记忆的合法选择）
+      if (!curHasKey) {
+        const target = listImageProviders().find(
+          (p) => p.providerId === soleProvider,
+        );
+        if (target?.models.length) imageModel.value = target.models[0].modelId;
+      }
+    }
+  } catch (e) {
+    console.warn("[main-webview] 图片模型智能默认失败", e);
+  }
   // 获取项目信息
   const pi = await bridge.queryProjectState();
   if (pi.project) {
