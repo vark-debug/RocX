@@ -1,0 +1,325 @@
+/* 信息流单条记录块 */
+.record-block {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--uxp-host-border-color, #454545);
+  /* 容器查询锚点：块太窄时隐藏行1提示词 */
+  container-type: inline-size;
+  container-name: recordblock;
+}
+
+/* 行1：参数摘要 + 提示词 + 状态 */
+.meta-line {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.meta-model {
+  font-weight: 600;
+  color: var(--uxp-host-text-color, #fff);
+  flex-shrink: 0;
+}
+.meta-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 600;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+.upgrade-badge {
+  background: rgba(255, 165, 0, 0.18);
+  color: #ffa500;
+  border: 1px solid rgba(255, 165, 0, 0.4);
+}
+.meta-sep {
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+.meta-param {
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+.meta-spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+/* 提示词（meta-line 内联，自动收缩省略号） */
+.prompt-inline {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+  font-size: 11px;
+}
+
+/* 容器查询：块太窄时隐藏提示词（参数 + 状态 + 操作固定占空间） */
+@container recordblock (max-width: 360px) {
+  .prompt-inline {
+    display: none;
+  }
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.status-label {
+  font-size: 11px;
+  opacity: 0.85;
+  flex-shrink: 0;
+}
+.header-btn {
+  background: var(--uxp-host-border-color, #383838);
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  flex-shrink: 0;
+  &:hover {
+    background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
+  }
+}
+
+/* 行2：强制 16:9 预览容器
+   —— 竖屏视频在容器内 letterbox（object-fit: contain），
+   容器高度完全由宽度（aspect-ratio）决定，行3操作行以此为定位基准 */
+.preview-frame {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: 4px;
+  background: #000;
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.frame-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  min-width: 0;
+  min-height: 0;
+  display: block;
+  cursor: pointer;
+}
+
+/* 图片记录大图预览（居中 contain 显示）；
+   透明底图用棋盘格衬底（PS 风格），否则黑字在黑底上看不清 */
+.frame-image {
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #cfcfcf 25%, transparent 25%, transparent 75%, #cfcfcf 75%),
+    linear-gradient(45deg, #cfcfcf 25%, transparent 25%, transparent 75%, #cfcfcf 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
+  display: block;
+}
+
+/* 无素材占位（排队中 / 抽帧未就绪） */
+.frame-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--uxp-host-border-color, #383838);
+}
+.frame-placeholder-icon {
+  font-size: 28px;
+  opacity: 0.5;
+}
+
+.play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  pointer-events: auto;
+  z-index: 5;
+}
+
+/* 生成中 / 失败卡片（占据预览容器，宽度撑满） */
+.failed-card {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  padding: 12px;
+  background: rgba(217, 83, 79, 0.1);
+  border: 1px solid rgba(217, 83, 79, 0.4);
+  border-radius: 4px;
+  font-size: 11px;
+  text-align: left;
+}
+.failed-title {
+  font-weight: 600;
+  color: #d9534f;
+  margin-bottom: 4px;
+  font-size: 13px;
+}
+.failed-msg {
+  margin-bottom: 2px;
+  word-break: break-word;
+  /* 提示词过长时最多显示 4 行并省略，避免撑高失败卡片挤出容器 */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-clamp: 4;
+}
+.failed-req {
+  opacity: 0.7;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 10px;
+  margin-bottom: 2px;
+}
+.failed-type {
+  opacity: 0.6;
+  font-size: 10px;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  margin-bottom: 2px;
+}
+.failed-status {
+  opacity: 0.6;
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+
+/* 余额不足：更醒目的橙色 */
+.failed-card-balance {
+  background: rgba(255, 165, 0, 0.12);
+  border-color: rgba(255, 165, 0, 0.5);
+  .failed-title {
+    color: #ffa500;
+  }
+}
+.failed-card-auth {
+  background: rgba(220, 53, 69, 0.15);
+  border-color: rgba(220, 53, 69, 0.5);
+}
+
+/* 生成中卡片（继承 failed-card 样式 + 蓝色主题 + 顶部动态条） */
+.generating-card {
+  background: rgba(75, 156, 245, 0.08);
+  border-color: rgba(75, 156, 245, 0.4);
+  overflow: hidden;
+  .failed-title {
+    color: var(--uxp-host-link-text-color, #4b9cf5);
+    margin-top: 4px;
+  }
+}
+.generating-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(75, 156, 245, 0.1);
+  overflow: hidden;
+}
+.generating-bar-fill {
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--uxp-host-link-text-color, #4b9cf5),
+    transparent
+  );
+  animation: generating-indeterminate 1.4s infinite linear;
+}
+@keyframes generating-indeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
+/* 多工程：在飞任务属于其它工程时的弱化提示行 */
+.foreign-task-hint {
+  margin-top: 4px;
+  font-size: 10px;
+  line-height: 1.4;
+  opacity: 0.7;
+  color: var(--uxp-host-link-text-color, #4b9cf5);
+  word-break: break-word;
+}
+
+.retry-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  background: #d9534f;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover { opacity: 0.85; }
+}
+
+/* 行3：操作按钮行（贴 16:9 容器下方，普通文档流自动对齐） */
+.action-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+.action-spacer {
+  flex: 1;
+}
+.action-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  background: var(--uxp-host-border-color, #383838);
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover:not(:disabled) {
+    background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
+  }
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  &.primary {
+    background: var(--uxp-host-link-text-color, #4b9cf5);
+    color: #fff;
+  }
+  &.upgrade-btn {
+    background: rgba(255, 165, 0, 0.18);
+    color: #ffa500;
+    &:hover:not(:disabled) {
+      background: rgba(255, 165, 0, 0.32);
+    }
+  }
+  &.danger {
+    background: rgba(217, 83, 79, 0.2);
+    color: #d9534f;
+    &:hover {
+      background: rgba(217, 83, 79, 0.35);
+    }
+  }
+}

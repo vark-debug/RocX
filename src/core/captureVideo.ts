@@ -10,45 +10,15 @@
  */
 import { premierepro, uxp } from "../globals";
 import { filesCore } from "./files";
-import { uploadCore } from "./ai/upload";
-import { storage } from "./storage";
-import type { ReferenceItem } from "@shared/messages";
-
-async function arrayBufferToBase64(ab: ArrayBuffer): Promise<string> {
-  const bytes = new Uint8Array(ab);
-  const CHUNK = 0x8000;
-  let bin = "";
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const sub = bytes.subarray(i, i + CHUNK);
-    bin += String.fromCharCode.apply(null, Array.from(sub));
-  }
-  return btoa(bin);
-}
-
-function safeStr(v: any): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
-  }
-}
-
-/**
- * 参考素材目录：PR 项目旁 AI_Generated_Media/References/（与生成记录同位置、独立文件夹）。
- * 项目未保存或创建失败时降级 plugin-data:/AI-Generated-Media/References/。
- * （旧的"用户自选导出目录 + 持久 token"机制已废弃，token 逻辑仅保留在
- * uploadReferenceFile 里用于兼容历史素材。）
- */
-async function getReferenceDir(projectPath?: string): Promise<{
-  ok: boolean;
-  folder?: any;
-  dirPath?: string;
-  error?: string;
-}> {
-  return await filesCore.ensureReferencesDir(projectPath);
-}
+import {
+  safeStr,
+  ownerOf,
+  getReferenceDir,
+  pollForNewestFile,
+  encodeDataUrlFromEntry,
+  uploadReferenceFile,
+} from "./captureBase";
+import type { ReferenceItem, CaptureOwner } from "@shared/messages";
 
 /**
  * 拿到打包在 ccx 里的 .epr 预设（plugin-data 读不出 binary 文件，
@@ -74,19 +44,14 @@ async function findExportByName(
   folder: any,
   filename: string,
 ): Promise<{ entry: any; name: string } | null> {
-  try {
-    const entries = await folder.getEntries();
-    const baseName = filename.split(".")[0];
-    const candidates = entries
-      .filter((e: any) => !e.isFolder && e.name.startsWith(baseName))
-      .sort((a: any, b: any) => b.name.length - a.name.length);
-    if (candidates.length > 0) {
-      return { entry: candidates[0], name: candidates[0].name };
-    }
-  } catch (e) {
-    console.warn("[captureVideo] list entries failed", e);
-  }
-  return null;
+  const baseName = filename.split(".")[0];
+  // 抓视频的 export 完成后通常文件已落盘,timeoutMs=0 表示只查一次不轮询
+  // 名字匹配:baseName.* 的所有候选项按"名字长度降序"取最短匹配(完整文件名优于 .tmp/.partial)
+  return await pollForNewestFile(folder, {
+    predicate: (e: any) => !e.isFolder && e.name.startsWith(baseName),
+    sortBy: (a: any, b: any) => a.name.length - b.name.length,
+    timeoutMs: 0,
+  });
 }
 
 export const captureVideoCore = {
@@ -104,12 +69,14 @@ export const captureVideoCore = {
     durationSec?: number;
     width?: number;
     height?: number;
+    owner?: CaptureOwner | null;
     error?: string;
   }> {
     console.log("[captureVideo] captureWorkAreaOnlyAsReference start", opts);
     try {
       const project = await premierepro.Project.getActiveProject();
       if (!project) return { ok: false, error: "无活动项目" };
+      const owner = ownerOf(project);
       const sequence = await project.getActiveSequence();
       if (!sequence) return { ok: false, error: "无活动序列" };
 
@@ -234,11 +201,8 @@ export const captureVideoCore = {
       // 读成 data URL
       let dataUrl: string | undefined;
       try {
-        const ab = await found.entry.read({ format: (uxp.storage as any).formats.binary });
-        if (ab) {
-          const b64 = await arrayBufferToBase64(ab);
-          dataUrl = `data:video/mp4;base64,${b64}`;
-        }
+        dataUrl = await encodeDataUrlFromEntry(found.entry, "video/mp4");
+        if (!dataUrl) console.warn("[captureVideo] encodeDataUrlFromEntry returned empty");
       } catch (e) {
         console.warn("[captureVideo] read for dataUrl failed", e);
       }
@@ -259,6 +223,7 @@ export const captureVideoCore = {
         durationSec,
         width,
         height,
+        owner,
       };
     } catch (e: any) {
       console.error("[captureVideo] captureOnly EXCEPTION:", e);
@@ -266,59 +231,20 @@ export const captureVideoCore = {
     }
   },
 
-  /**
+/**
    * 上传 reference 对应的本地视频到 MiniMax
+   *
+   * 实际实现见 captureBase.uploadReferenceFile;
+   * 这里 re-export 是为了 captureVideoCore.uploadReferenceFile 公开签名不变。
+   * 视频历史素材兜底只检查 exportFolderToken(无 sourceFolderToken)。
    */
-  async uploadReferenceFile(args: {
-    filePath: string;
-    fileName: string;
-  }): Promise<{
-    ok: boolean;
-    fileId?: string;
-    uploadedAt?: string;
-    error?: string;
-  }> {
-    try {
-      const apiKey = await storage.getApiKey();
-      if (!apiKey) return { ok: false, error: "未配置 MiniMax API Key" };
-
-      // 1) 按路径特征自动分派（plugin-data 协议 URL / 项目旁 file://）
-      let file: any = await filesCore.getEntryAnyPath(args.filePath);
-      // 2) 兜底：历史素材在旧"用户自选导出目录"，用持久 token 按文件名找
-      if (!file) {
-        try {
-          const token = localStorage.getItem("MiniMax.exportFolderToken");
-          if (token) {
-            const fs: any = uxp.storage.localFileSystem;
-            const folder = await fs.getEntryForPersistentToken(token);
-            if (folder && folder.isFolder) {
-              const f = await folder.getEntry(args.fileName);
-              if (f && !f.isFolder) file = f;
-            }
-          }
-        } catch (e) {
-          // 旧目录里没有新文件是常态，静默跳过
-        }
-      }
-      if (!file) {
-        return { ok: false, error: "本地文件不可访问" };
-      }
-
-      const r = await uploadCore.uploadFile({
-        apiKey,
-        fileToken: file,
-        fileName: args.fileName,
-      });
-      if (!r.ok || !r.fileId) return { ok: false, error: r.error };
-      return {
-        ok: true,
-        fileId: r.fileId,
-        uploadedAt: new Date().toISOString(),
-      };
-    } catch (e: any) {
-      console.error("[captureVideo] uploadReferenceFile EXCEPTION:", e);
-      return { ok: false, error: safeStr((e as any)?.message || e) };
-    }
+  async uploadReferenceFile(args: { filePath: string; fileName: string; providerId?: string }) {
+    return uploadReferenceFile({
+      filePath: args.filePath,
+      fileName: args.fileName,
+      providerId: args.providerId,
+      fallbackTokenKeys: ["MiniMax.exportFolderToken"],
+    });
   },
 
   /**

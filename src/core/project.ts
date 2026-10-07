@@ -74,6 +74,33 @@ export const projectCore = {
     }
   },
 
+  /** 活动序列分辨率（序列画布原始像素，不缩放）；无项目/序列返回 null */
+  async getActiveSequenceSize(): Promise<{ width: number; height: number } | null> {
+    try {
+      const project = await fetchActiveProject();
+      if (!project) return null;
+      const active = await project.getActiveSequence();
+      if (!active) return null;
+      const frameSize: any = await (active as any).getFrameSize?.();
+      if (!frameSize) return null;
+      const width =
+        typeof frameSize.width === "number"
+          ? Math.round(frameSize.width)
+          : Math.round(frameSize.right - frameSize.left);
+      const height =
+        typeof frameSize.height === "number"
+          ? Math.round(frameSize.height)
+          : Math.round(frameSize.bottom - frameSize.top);
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return null;
+      }
+      return { width, height };
+    } catch (e) {
+      console.warn("getActiveSequenceSize failed", e);
+      return null;
+    }
+  },
+
   async queryProjectState() {
     const project = await this.getCurrent();
     const sequences = await this.getSequences();

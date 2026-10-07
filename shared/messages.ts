@@ -15,6 +15,7 @@ export type ReferenceType = "reference_video" | "reference_image" | "reference_a
 /** Provider 模型能力位（用于 UI 按能力隐藏按钮） */
 export type VideoGenCapability =
   | "videoGeneration"
+  | "imageGeneration"
   | "promptOptimization"
   | "resolutionUpscale"
   | "imageReference"
@@ -26,6 +27,7 @@ export const REPORT_PURPOSE = {
   VIDEO_GEN: "视频生成",
   UPSCALE: "分辨率升级",
   PROMPT_OPT: "提示词优化",
+  IMAGE_GEN: "图片生成",
 } as const;
 
 export type ReportPurpose =
@@ -45,6 +47,8 @@ export interface ReferenceItem {
   type: ReferenceType;
   localPath: string;
   fileId?: string;
+  /** fileId 归属的 provider id；缺省视为 legacy 单 provider 时代的默认 provider */
+  uploadProvider?: string;
   uploadedAt?: string;
   fileName: string;
   sizeBytes: number;
@@ -56,24 +60,63 @@ export interface ReferenceItem {
   uploading?: boolean;
   /** webview 端标记：是否已被某次生成提交消费；用于清空状态列显示（UI 用，不持久化到磁盘） */
   consumed?: boolean;
+  /**
+   * webview 端标记：抓帧→PS 路径下的「等待用户点修改完成」状态（UI 用，不持久化到磁盘）。
+   * 抓帧后立刻写入，调用方调 bridge.openInPhotoshop 启动 PS；用户在面板上点确认按钮后才
+   * 走 uploadReferenceFile，成功后清掉。references 数组本身不持久化，session 断电即丢，
+   * 避免刷新/重载场景下静默上传历史 jpg。
+   */
+  pendingUpload?: boolean;
+}
+
+/**
+ * 抓素材那一刻的工程归属快照。
+ *
+ * 归属不再事后推断（曾用「素材父级目录 → 实时活动工程 → 缓存」三层信任层级，
+ * 读一次写一次各猜一次，多工程下必然错位），而是在抓取瞬间由 UXP 端
+ * 从真实的工程对象直接读出并随抓取结果返回。
+ */
+export interface CaptureOwner {
+  projectGuid: string;
+  /** 工程文件的绝对路径（不是目录），落盘按它定位 records JSON */
+  projectPath: string;
+  projectName?: string;
 }
 
 export interface GenerationRecord {
   id: string;
   createdAt: string;
   prompt: string;
+  /** 记录类型：缺省 "video"（老记录兼容）；"image" 为图片生成记录 */
+  kind?: "video" | "image";
   params: {
-    model: VideoModel;
+    /** 多 provider 后 model id 由 provider 决定，放宽为 string */
+    model: string;
     ratio: VideoRatio;
     duration: number;
-    resolution: VideoResolution;
+    /** 多 provider 后分辨率档位名由 provider 决定，放宽为 string */
+    resolution: string;
     /** 当前记录对应的 provider id；老记录缺失时默认 "minimax" */
     provider?: string;
+  };
+  /**
+   * 图片生成记录专属参数（kind === "image" 时使用）。
+   * 视频语义的 duration/resolution 对图片无意义，图片的尺寸档位/像素在这里。
+   */
+  imageParams?: {
+    width: number;
+    height: number;
+    /** 计价档位："1K" | "2K"（由输出像素总数 ≤236 万与否算出，见 billingTierOf） */
+    resolution: string;
+    /** 输出格式："jpeg" | "png" */
+    outputFormat: string;
   };
   references: ReferenceItem[];
   taskId?: string;
   workFile?: string;
   importedFile?: string;
+  /** 图片生成（阶段 2A 预览）：结果图 CDN URL（下载/导入在后续阶段） */
+  resultUrl?: string;
   status: RecordStatus;
   thumb?: string;
   error?: {
@@ -102,7 +145,43 @@ export interface GenerationRecord {
    * 用于把"原 768P 任务"和"升级出来的 2K 任务"关联起来，避免重复升级 / 重复扣费
    */
   parentTaskId?: string;
-  upgradedFromResolution?: MiniMaxResolution;
+  upgradedFromResolution?: VideoResolution;
+  /**
+   * 归属工程标识：PR 同一进程可打开多个工程，此字段标识本记录属于哪个工程。
+   * - 用于「是否属于当前活动工程」的判定与 UI 归属提示
+   * - 与 projectPath 共同构成归属信息：guid 用于判定，path 用于落盘路由
+   * - 历史记录缺失时，读取时用外层 ProjectRecords 的同名字段补齐
+   */
+  projectGuid?: string;
+  /** 归属工程的绝对路径：落盘路由依据（写入时不再用「调用瞬间的活动工程路径」） */
+  projectPath?: string;
+}
+
+export interface PromptOptimization {
+  /** 本次优化前的 prompt 文本 */
+  originalPrompt: string;
+  /** provider 优化后的 prompt 文本(成功时;失败则缺省) */
+  optimizedPrompt?: string;
+  /** 是否成功(失败时仍落盘,作为失败历史可追溯) */
+  success: boolean;
+  /** provider id(便于审计未来多 provider 场景) */
+  provider: string;
+  /** 关联的 references(用户调试时回看哪批素材下做的优化) */
+  references: ReferenceItem[];
+  /** ISO 时间戳 */
+  createdAt: string;
+  /** 错误信息(失败时) */
+  error?: string;
+  /** provider 用量;仅 UI 优化成功时上报飞书用 */
+  usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
+  /**
+   * 归属工程的 guid:落盘路由依据。
+   * 优化与生成共用 CaptureContext 锁定值,所以归属在优化完成那一刻就已确定,
+   * 不受后续切工程影响(与 GenerationRecord.projectGuid 同义)。
+   */
+  projectGuid?: string;
+  /** 归属工程的绝对路径:落盘路由依据(缺失时回落到当前活动工程,兼容旧数据) */
+  projectPath?: string;
 }
 
 export interface ProjectRecords {
@@ -111,6 +190,11 @@ export interface ProjectRecords {
   records: GenerationRecord[];
   /** 记录文件落盘位置模式：'primary' = 项目旁；'fallback' = 插件数据目录 */
   storageMode: "primary" | "fallback";
+  /**
+   * 提示词优化历史(不入 records 数组,不显示在记录列表)。
+   * 与生成 records 同盘,共享 primary / fallback 落盘路由;前端轮询时按需加载。
+   */
+  promptOptimizations?: PromptOptimization[];
 }
 
 // ===== 中性命名（推荐新代码使用）=====
@@ -152,24 +236,16 @@ export const VIDEO_PARAM_CONSTRAINTS: Record<VideoModel, VideoParamConstraints> 
   },
 };
 
-// ===== 旧名 alias（保持向后兼容）=====
-/** @deprecated Use VideoModel instead. */
-export type MiniMaxModel = VideoModel;
-/** @deprecated Use VideoRatio instead. */
-export type MiniMaxRatio = VideoRatio;
-/** @deprecated Use VideoResolution instead. */
-export type MiniMaxResolution = VideoResolution;
-/** @deprecated Use VideoParamConstraints instead. */
-export type MiniMaxParamConstraints = VideoParamConstraints;
-/** @deprecated Use VIDEO_PARAM_CONSTRAINTS instead. */
-export const MINIMAX_PARAM_CONSTRAINTS = VIDEO_PARAM_CONSTRAINTS;
+// ===== MiniMax* 旧名 alias 已删除 (v2 refactor V1.1) =====
+// 旧名仅保留在 MiniMaxCreateRequest / MiniMaxCreateResponse / MiniMaxQueryResponse
+// 三个历史接口的命名上(V1.2 删除整个接口);字段类型已统一改为 Video* / VIDEO_*。
 
 export interface MiniMaxCreateRequest {
-  model: MiniMaxModel;
+  model: VideoModel;
   prompt: string;
-  ratio: MiniMaxRatio;
+  ratio: VideoRatio;
   duration: number;
-  resolution: MiniMaxResolution;
+  resolution: VideoResolution;
   references: ReferenceItem[];
 }
 
@@ -229,6 +305,9 @@ export interface UxptoWebviewAPI {
     }>;
   }>;
 
+  /** 活动序列分辨率（序列画布原始像素，不缩放）；无项目/序列返回 null */
+  getActiveSequenceSize(): Promise<{ width: number; height: number } | null>;
+
   /** 主动获取最新主题（启动期 / 调色板刷新） */
   getColorScheme(): Promise<{
     theme: string;
@@ -236,7 +315,14 @@ export interface UxptoWebviewAPI {
   }>;
 
   /** 读取当前 PR 项目对应的记录 JSON（不存在返回空 records） */
-  recordsRead(): Promise<{
+  /**
+   * 读取指定工程的记录；不传 target 时读实时活动工程。
+   * 多工程场景下由调用方（webview 的 projectInfo）指定，保证与写入指向同一工程。
+   */
+  recordsRead(target?: {
+    projectGuid?: string;
+    projectPath?: string;
+  }): Promise<{
     ok: boolean;
     data: ProjectRecords | null;
     error?: string;
@@ -248,6 +334,16 @@ export interface UxptoWebviewAPI {
     ok: boolean;
     error?: string;
     storageMode: "primary" | "fallback";
+  }>;
+
+  /**
+   * 实时探针:试在 primary 路径下写一个临时 .ai-gen-probe.json,返回当前
+   * primary 路径实际可写性。webview 端 mount / onProjectChanged 时调一次刷新 ⚠ 提示。
+   */
+  probePrimary(target?: { projectPath?: string }): Promise<{
+    ok: boolean;
+    primaryAvailable: boolean;
+    error?: string;
   }>;
 
   /** 弹 FilePicker，选文件 → 校验 → 调用 MiniMax upload */
@@ -310,8 +406,8 @@ export interface UxptoWebviewAPI {
   }>;
 
   /** 获取 / 设置 API Key（uxp.storage） */
-  getApiKey(): Promise<string | null>;
-  setApiKey(key: string): Promise<{ ok: boolean; error?: string }>;
+  getApiKey(args?: { providerId?: string }): Promise<string | null>;
+  setApiKey(key: string, providerId?: string): Promise<{ ok: boolean; error?: string }>;
 
   /** 飞书多维表格联动设置（与 API Key 同位置持久化） */
   getFeishuConfig(): Promise<{
@@ -415,6 +511,8 @@ export interface UxptoWebviewAPI {
   }): Promise<{
     ok: boolean;
     reference?: ReferenceItem & { thumbDataUrl?: string };
+    /** 抓取瞬间的工程归属；无活动工程时为 null */
+    owner?: CaptureOwner | null;
     error?: string;
   }>;
 
@@ -427,6 +525,11 @@ export interface UxptoWebviewAPI {
   }): Promise<{
     ok: boolean;
     reference?: ReferenceItem;
+    /** 抓取瞬间的工程归属；无活动工程时为 null */
+    owner?: CaptureOwner | null;
+    /** 序列帧尺寸（用于 webview 智能填写画面比例） */
+    width?: number;
+    height?: number;
     error?: string;
   }>;
 
@@ -442,6 +545,18 @@ export interface UxptoWebviewAPI {
     ok: boolean;
     fileId?: string;
     uploadedAt?: string;
+    error?: string;
+  }>;
+
+  /**
+   * 拉起 Photoshop 打开指定本地文件（抓帧→PS 路径）。
+   * 内部按 C++ Hybrid addon → launcher 脚本 → 系统关联兜底 顺序尝试，
+   * `source` 返回实际命中的那条路径，供实机诊断日志使用。
+   * 异常一律吞掉转成 {ok:false}，webview 端不据此报错，只 console.warn。
+   */
+  openInPhotoshop(localPath: string): Promise<{
+    ok: boolean;
+    source?: "native" | "launcher" | "fallback";
     error?: string;
   }>;
 
@@ -473,6 +588,8 @@ export interface UxptoWebviewAPI {
     /** 导出视频的像素宽高（用于前端自动按比例填写） */
     width?: number;
     height?: number;
+    /** 抓取瞬间的工程归属；无活动工程时为 null */
+    owner?: CaptureOwner | null;
     error?: string;
   }>;
 }

@@ -2,6 +2,9 @@ import { ref, watch, onMounted } from "vue";
 import type { GenerationRecord } from "@shared/messages";
 import { bridge } from "../services/bridge";
 
+/** 预览 API 类型（RecordFeedBlock 的 props 用） */
+export type RecordPreviewApi = ReturnType<typeof useRecordPreview>;
+
 /**
  * 记录预览 composable：canvas 抽帧 / 视频 / 缩略图 URL 缓存
  * 从 RecordsPanel.vue 抽出，保持原有所有方法 / 状态 / 行为完全不变
@@ -244,6 +247,8 @@ export function useRecordPreview(
 
   function thumbModeOf(rec: GenerationRecord): "image" | "video" | "placeholder" {
     if (rec.status !== "generated" && rec.status !== "imported") return "placeholder";
+    // 图片记录：直接用 provider 返回的 resultUrl，无需 canvas 抽帧
+    if (rec.kind === "image") return rec.resultUrl ? "image" : "placeholder";
     if (canvasThumbCache.value[rec.id]) return "image";
     if (thumbUrlOf(rec)) return "video";
     return "placeholder";

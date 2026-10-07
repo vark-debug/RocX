@@ -1,22 +1,22 @@
 <script setup lang="ts">
 import { ref, computed } from "vue";
 import type {
-  MiniMaxModel,
-  MiniMaxRatio,
-  MiniMaxResolution,
-  MiniMaxParamConstraints,
+  VideoModel,
+  VideoRatio,
+  VideoResolution,
+  VideoParamConstraints,
 } from "@shared/messages";
 import type { ModelDescriptor, VideoGenCapability } from "../providers/core/types";
 
 const props = defineProps<{
   prompt: string;
-  model: MiniMaxModel;
-  ratio: MiniMaxRatio;
+  model: VideoModel;
+  ratio: VideoRatio;
   duration: number;
-  resolution: MiniMaxResolution;
+  resolution: VideoResolution;
   /** 当前 provider 提供的模型列表（来自 registry；按 provider + capability 渲染按钮） */
   models: ModelDescriptor[];
-  constraints: MiniMaxParamConstraints;
+  constraints: VideoParamConstraints;
   hasReferences: boolean;
   canSubmit: boolean;
   polling: boolean;

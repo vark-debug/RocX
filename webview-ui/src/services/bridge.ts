@@ -18,19 +18,23 @@ const ensure = (): UxptoWebviewAPI => {
 export const bridge = {
   echo: (msg: string) => ensure().echo(msg),
   queryProjectState: () => ensure().queryProjectState(),
+  getActiveSequenceSize: () => ensure().getActiveSequenceSize(),
   getColorScheme: () => ensure().getColorScheme(),
-  recordsRead: () => ensure().recordsRead(),
+  recordsRead: (target?: { projectGuid?: string; projectPath?: string }) =>
+    ensure().recordsRead(target),
   recordsWrite: (data: ProjectRecords) => ensure().recordsWrite(data),
-  pickAndUploadReference: (kind: FileKind) =>
-    ensure().pickAndUploadReference({ kind }),
+  probePrimary: (target?: { projectPath?: string }) => ensure().probePrimary(target),
+  pickAndUploadReference: (args: { kind: FileKind; providerId?: string }) =>
+    ensure().pickAndUploadReference(args),
   reuploadReference: (args: any) => ensure().reuploadReference(args),
   uploadExistingFileAsReference: (args: any) =>
     ensure().uploadExistingFileAsReference(args),
   downloadFile: (args: any) => ensure().downloadFile(args),
   insertToTimeline: (args: any) => ensure().insertToTimeline(args),
   importToProject: (args: any) => ensure().importToProject(args),
-  getApiKey: () => ensure().getApiKey(),
-  setApiKey: (k: string) => ensure().setApiKey(k),
+  getApiKey: (providerId?: string) => ensure().getApiKey({ providerId }),
+  setApiKey: (k: string, providerId?: string) =>
+    ensure().setApiKey(k, providerId),
   getFeishuConfig: () => ensure().getFeishuConfig(),
   setFeishuConfig: (cfg: any) => ensure().setFeishuConfig(cfg),
   reportGenerated: (record: any, purpose?: any) =>
@@ -48,6 +52,7 @@ export const bridge = {
   captureFrameOnlyAsReference: (args?: any) =>
     ensure().captureFrameOnlyAsReference(args),
   uploadReferenceFile: (args: any) => ensure().uploadReferenceFile(args),
+  openInPhotoshop: (p: string) => ensure().openInPhotoshop(p),
   captureWorkAreaAndUploadAsReference: (args?: any) =>
     ensure().captureWorkAreaAndUploadAsReference(args),
   captureWorkAreaOnlyAsReference: (args?: any) =>

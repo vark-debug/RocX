@@ -13,43 +13,15 @@ import { premierepro, uxp } from "../globals";
 import { filesCore, getFs } from "./files";
 import { uploadCore } from "./ai/upload";
 import { storage } from "./storage";
-import type { ReferenceItem } from "@shared/messages";
-
-function safeStr(v: any): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  try {
-    return JSON.stringify(v);
-  } catch {
-    return String(v);
-  }
-}
-
-async function arrayBufferToBase64(ab: ArrayBuffer): Promise<string> {
-  const bytes = new Uint8Array(ab);
-  const CHUNK = 0x8000;
-  let bin = "";
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    const sub = bytes.subarray(i, i + CHUNK);
-    bin += String.fromCharCode.apply(null, Array.from(sub));
-  }
-  return btoa(bin);
-}
-
-/**
- * 参考素材目录：PR 项目旁 AI_Generated_Media/References/（与生成记录同位置、独立文件夹）。
- * 项目未保存或创建失败时降级 plugin-data:/AI-Generated-Media/References/。
- * （旧的"用户自选导出目录 + 持久 token"机制已废弃，token 逻辑仅保留在
- * uploadReferenceFile 里用于兼容历史素材。）
- */
-async function getReferenceDir(projectPath?: string): Promise<{
-  ok: boolean;
-  folder?: any;
-  dirPath?: string;
-  error?: string;
-}> {
-  return await filesCore.ensureReferencesDir(projectPath);
-}
+import {
+  safeStr,
+  ownerOf,
+  getReferenceDir,
+  pollForNewestFile,
+  encodeDataUrlFromEntry,
+  uploadReferenceFile,
+} from "./captureBase";
+import type { ReferenceItem, CaptureOwner } from "@shared/messages";
 
 export const framesCore = {
   /**
@@ -62,12 +34,17 @@ export const framesCore = {
   } = {}): Promise<{
     ok: boolean;
     reference?: ReferenceItem;
+    owner?: CaptureOwner | null;
+    /** 序列帧尺寸（用于 webview 智能填写画面比例） */
+    width?: number;
+    height?: number;
     error?: string;
   }> {
     console.log("[frames] captureOnlyAsReference start", opts);
     try {
       const project = await premierepro.Project.getActiveProject();
       if (!project) return { ok: false, error: "无活动项目" };
+      const owner = ownerOf(project);
       const sequence = await project.getActiveSequence();
       if (!sequence) return { ok: false, error: "无活动序列，请先激活一个序列" };
 
@@ -105,6 +82,20 @@ export const framesCore = {
       const separator = exportFolderPath.includes("\\") ? "\\" : "/";
       const outputPath = exportFolderPath + separator + filename;
 
+      // 先快照目录里已存在的 capture-* 文件名。
+      // exportSequenceFrame 返回 true 只代表导出命令已下发,写盘是异步的;
+      // 若不在此之前快照,第 2 次抓帧时轮询会立刻命中上一次的残留文件,
+      // 导致把旧帧交给 Photoshop。
+      const preExistingNames = new Set<string>();
+      try {
+        const preEntries: any[] = (await exportFolder.getEntries()) || [];
+        for (const e of preEntries) {
+          if (!e.isFolder && /^capture-\d+\./.test(e.name)) preExistingNames.add(e.name);
+        }
+      } catch (e) {
+        console.warn("[frames] pre-export snapshot failed", e);
+      }
+
       // 按 Adobe premiere-api 样本调用 Exporter.exportSequenceFrame
       const Exporter: any = (premierepro as any).Exporter;
       console.log("[frames] calling Exporter.exportSequenceFrame...");
@@ -130,50 +121,36 @@ export const framesCore = {
         };
       }
 
-      // 用 Folder token 列出条目，找到 capture-* 最新的那个
-      // （不依赖 Adobe 25.3 给 .png/.jpg 加后缀的命名 bug）
-      // Windows 上 exportSequenceFrame 返回 true 后文件未必立即可见（写盘延迟），
-      // 短轮询兜底，最多 ~1.5s（macOS 同步写盘，几乎立即命中）
-      let actualFile: any = null;
-      let actualName: string | null = null;
-      const startTs = Date.now();
-      while (Date.now() - startTs < 1500) {
-        try {
-          const entries: any[] = (await exportFolder.getEntries()) || [];
-          const captureFiles = entries
-            .filter((e: any) => !e.isFolder && /^capture-\d+\./.test(e.name))
-            .sort((a: any, b: any) => {
-              const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
-              const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
-              return tb - ta;
-            });
-          if (captureFiles.length > 0) {
-            actualFile = captureFiles[0];
-            actualName = captureFiles[0].name;
-            break;
-          }
-        } catch (e) {
-          console.warn("[frames] list entries failed", e);
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      if (!actualFile || !actualName) {
+      // 轮询等待**本次新增**的 capture-* 文件落盘
+      // (不依赖 Adobe 25.3 给 .png/.jpg 加后缀的命名 bug)
+      // Windows 上写盘有延迟,最多等 ~1.5s;macOS 几乎立即命中
+      const captureRegex = /^capture-\d+\./;
+      const found = await pollForNewestFile(exportFolder, {
+        predicate: (e: any) => captureRegex.test(e.name),
+        sortBy: (a: any, b: any) => {
+          const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
+          const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
+          return tb - ta;
+        },
+        excludeNames: preExistingNames,
+        timeoutMs: 1500,
+        intervalMs: 100,
+      });
+      if (!found) {
         return {
           ok: false,
-          error: `exportSequenceFrame 报成功但目录里没有 capture-* 文件。检查目录: ${exportFolderPath}`,
+          error: `exportSequenceFrame 报成功但 1.5s 内目录里没有新增 capture-* 文件。检查目录: ${exportFolderPath}`,
         };
       }
+      const { entry: actualFile, name: actualName } = found;
       const actualPath = `${exportFolderPath}/${actualName}`;
       console.log("[frames] actualPath:", actualPath);
 
       // 读成 data URL 给 Webview 直接显示
       let dataUrl: string | undefined;
       try {
-        const ab = await filesCore.readFileBytes(actualFile);
-        if (ab) {
-          const b64 = await arrayBufferToBase64(ab);
-          dataUrl = `data:image/jpeg;base64,${b64}`;
-        }
+        dataUrl = await encodeDataUrlFromEntry(actualFile, "image/jpeg");
+        if (!dataUrl) console.warn("[frames] encodeDataUrlFromEntry returned empty");
       } catch (e) {
         console.warn("[frames] read frame as data URL failed", e);
       }
@@ -186,7 +163,7 @@ export const framesCore = {
         thumbDataUrl: dataUrl,
         // fileId / uploadedAt 暂不设置，等待后台 upload
       };
-      return { ok: true, reference: ref };
+      return { ok: true, reference: ref, owner, width, height };
     } catch (e: any) {
       console.error("[frames] captureOnly EXCEPTION:", e);
       return { ok: false, error: safeStr((e as any)?.message || e) };
@@ -196,64 +173,18 @@ export const framesCore = {
   /**
    * 上传 reference 对应的本地文件到 MiniMax，返回 { fileId, uploadedAt }
    * 由 webview 端在拿到本地 reference 后异步调用，更新 fileId / uploadedAt
+   *
+   * 实际实现见 captureBase.uploadReferenceFile;
+   * 这里 re-export 是为了 framesCore.uploadReferenceFile 公开签名不变。
    */
-  async uploadReferenceFile(args: {
-    filePath: string;
-    fileName: string;
-  }): Promise<{
-    ok: boolean;
-    fileId?: string;
-    uploadedAt?: string;
-    error?: string;
-  }> {
-    try {
-      const apiKey = await storage.getApiKey();
-      if (!apiKey) return { ok: false, error: "未配置 MiniMax API Key" };
-
-      // 1) 按路径特征自动分派（plugin-data 协议 URL / 项目旁 file://），
-      //    覆盖新机制：References/（项目旁或 plugin-data 内）
-      let file: any = await filesCore.getEntryAnyPath(args.filePath);
-      // 2) 兜底：历史素材在旧"用户自选导出目录"，用持久 token 按文件名找
-      if (!file) {
-        const sourceTokenKey = "MiniMax.sourceFolderToken";
-        const tryTokens = [sourceTokenKey, "MiniMax.exportFolderToken"];
-        for (const key of tryTokens) {
-          try {
-            const token = localStorage.getItem(key);
-            if (!token) continue;
-            const fs: any = uxp.storage.localFileSystem;
-            const folder = await fs.getEntryForPersistentToken(token);
-            if (folder && folder.isFolder) {
-              const f = await folder.getEntry(args.fileName);
-              if (f && !f.isFolder) {
-                file = f;
-                break;
-              }
-            }
-          } catch (e) {
-            // 旧目录里没有新文件是常态，静默跳过
-          }
-        }
-      }
-      if (!file) {
-        return { ok: false, error: "本地文件不可访问" };
-      }
-
-      const r = await uploadCore.uploadFile({
-        apiKey,
-        fileToken: file,
-        fileName: args.fileName,
-      });
-      if (!r.ok || !r.fileId) return { ok: false, error: r.error };
-      return {
-        ok: true,
-        fileId: r.fileId,
-        uploadedAt: new Date().toISOString(),
-      };
-    } catch (e: any) {
-      console.error("[frames] uploadReferenceFile EXCEPTION:", e);
-      return { ok: false, error: safeStr((e as any)?.message || e) };
-    }
+  async uploadReferenceFile(args: { filePath: string; fileName: string; providerId?: string }) {
+    return uploadReferenceFile({
+      filePath: args.filePath,
+      fileName: args.fileName,
+      providerId: args.providerId,
+      // frames 的历史素材兜底:同时检查 sourceFolderToken + exportFolderToken
+      fallbackTokenKeys: ["MiniMax.sourceFolderToken", "MiniMax.exportFolderToken"],
+    });
   },
 
   /**
@@ -262,15 +193,19 @@ export const framesCore = {
   async captureAndUploadAsReference(opts: {
     width?: number;
     height?: number;
+    /** 目标 provider id；缺省回落默认 provider */
+    providerId?: string;
   } = {}): Promise<{
     ok: boolean;
     reference?: ReferenceItem & { thumbDataUrl?: string };
+    owner?: CaptureOwner | null;
     error?: string;
   }> {
     console.log("[frames] captureAndUploadAsReference start", opts);
     try {
       const project = await premierepro.Project.getActiveProject();
       if (!project) return { ok: false, error: "无活动项目" };
+      const owner = ownerOf(project);
       const sequence = await project.getActiveSequence();
       if (!sequence) return { ok: false, error: "无活动序列，请先激活一个序列" };
 
@@ -328,65 +263,51 @@ export const framesCore = {
         };
       }
 
-      // 用 Folder token 列出条目，找到 capture-* 最新的那个
-      // （不依赖 Adobe 25.3 给 .png/.jpg 加后缀的命名 bug）
-      // Windows 上 exportSequenceFrame 返回 true 后文件未必立即可见（写盘延迟），
-      // 短轮询兜底，最多 ~1.5s（macOS 同步写盘，几乎立即命中）
-      let actualFile: any = null;
-      let actualName: string | null = null;
-      const startTs = Date.now();
-      while (Date.now() - startTs < 1500) {
-        try {
-          const entries: any[] = (await exportFolder.getEntries()) || [];
-          const captureFiles = entries
-            .filter((e) => !e.isFolder && /^capture-\d+\./.test(e.name))
-            .sort((a, b) => {
-              // 文件名 capture-<timestamp>.<ext>，timestamp 越大越新
-              const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
-              const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
-              return tb - ta;
-            });
-          if (captureFiles.length > 0) {
-            actualFile = captureFiles[0];
-            actualName = actualFile.name;
-            break;
-          }
-        } catch (e: any) {
-          console.warn("[frames] list/parse entries failed", e?.message);
-        }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      if (!actualFile || !actualName) {
+      // 用 Folder token 列出条目,找到 capture-* 最新的那个
+      // (不依赖 Adobe 25.3 给 .png/.jpg 加后缀的命名 bug)
+      // Windows 上 exportSequenceFrame 返回 true 后文件未必立即可见(写盘延迟),
+      // 短轮询兜底,最多 ~1.5s(macOS 同步写盘,几乎立即命中)
+      const captureRegex = /^capture-\d+\./;
+      const found = await pollForNewestFile(exportFolder, {
+        predicate: (e: any) => captureRegex.test(e.name),
+        sortBy: (a: any, b: any) => {
+          // 文件名 capture-<timestamp>.<ext>,timestamp 越大越新
+          const ta = Number(a.name.match(/capture-(\d+)/)?.[1] || 0);
+          const tb = Number(b.name.match(/capture-(\d+)/)?.[1] || 0);
+          return tb - ta;
+        },
+        timeoutMs: 1500,
+        intervalMs: 100,
+      });
+      if (!found) {
         return {
           ok: false,
           error: `exportSequenceFrame 报成功但目录里没有 capture-* 文件。检查目录: ${exportFolderPath}`,
         };
       }
+      const { entry: actualFile, name: actualName } = found;
       const actualPath = `${exportFolderPath}/${actualName}`;
       console.log("[frames] found:", actualName);
 
       // 读成 data URL 给 Webview 直接显示
       let dataUrl: string | undefined;
       try {
-        const ab = await filesCore.readFileBytes(actualFile);
-        if (ab) {
-          const b64 = await arrayBufferToBase64(ab);
-          dataUrl = `data:image/jpeg;base64,${b64}`;
-          console.log("[frames] dataUrl length:", dataUrl.length);
-        }
+        dataUrl = await encodeDataUrlFromEntry(actualFile, "image/jpeg");
+        if (dataUrl) console.log("[frames] dataUrl length:", dataUrl.length);
       } catch (e) {
         console.warn("[frames] read frame as data URL failed", e);
       }
 
-      // 上传到 MiniMax（API Key 在 UXP 端读取 secureStorage）
-      const apiKey = await storage.getApiKey();
+      // 上传到目标 provider（API Key 在 UXP 端读取 secureStorage）
+      const apiKey = await storage.getApiKey(opts.providerId);
       if (!apiKey) {
-        return { ok: false, error: "未配置 MiniMax API Key" };
+        return { ok: false, error: "未配置 API Key" };
       }
       const up = await uploadCore.uploadFile({
         apiKey,
         fileToken: actualFile, // 直接用 token 传，避免再调 getFileByPath
         fileName: actualName,
+        providerId: opts.providerId,
       });
       console.log("[frames] upload result:", { ok: up.ok, fileId: up.fileId, error: up.error });
       if (!up.ok || !up.fileId) {
@@ -402,7 +323,7 @@ export const framesCore = {
         sizeBytes: actualFile.size || 0,
         thumbDataUrl: dataUrl,
       };
-      return { ok: true, reference: ref };
+      return { ok: true, reference: ref, owner };
     } catch (e: any) {
       console.error("[frames] EXCEPTION:", e);
       return { ok: false, error: String(e?.message || e) };

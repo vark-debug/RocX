@@ -1,10 +1,11 @@
 /**
- * 记录操作 composable：从 RecordsPanel.vue 抽出
- * - 状态展示（statusOf / failedCardClass / failedTitle / errorTypeLabel / canRetrySelected）
- * - 升级 2K 判定（canUpgradeTo2K，按 provider + model.capability 决定）
- * - 拖拽到 PR 时间线（onDragStart / onDragOver / onDragEnd）
- * - 生成中耗时（generatingElapsed）
- * - 选中状态维护
+ * 记录操作 composable（信息流版）：从 RecordsPanel.vue 抽出
+ * - 选中状态维护（selectedId：缩略图点击跳转 / 外部 @select 用）
+ * - 播放互斥（playingId：同一时间只允许一个块的视频在播）
+ * - 状态展示（statusOf / 失败卡片 / errorTypeLabel，逐记录纯函数）
+ * - 升级 2K 判定（canUpgradeTo2KOf，按 provider + model.capability 决定）
+ * - 拖拽到 PR 时间线（按记录闭包）
+ * - 生成中耗时（generatingElapsedOf，全局 1s tick 驱动）
  */
 import { computed, ref, watch, onBeforeUnmount } from "vue";
 import type { GenerationRecord } from "@shared/messages";
@@ -18,32 +19,53 @@ import type { VideoGenCapability } from "../providers/core/types";
 // 用宽松类型避免 Vue 的 WritableComputedRef / ComputedRef 类型推导差异。
 type RefAny<T> = { value: T };
 
+export interface ProjectInfo {
+  path: string;
+  guid: string;
+  name?: string;
+}
+
+/** 记录是否属于其它工程（多工程并行时才有意义；无归属信息的历史记录不提示） */
+export function isForeignRecord(
+  rec: GenerationRecord,
+  cur?: ProjectInfo | null,
+): boolean {
+  if (!cur) return false;
+  if (rec.projectGuid && cur.guid) return rec.projectGuid !== cur.guid;
+  if (rec.projectPath && cur.path) return rec.projectPath !== cur.path;
+  return false;
+}
+
+/** 其它工程的显示名：取 projectPath 的 basename（去掉扩展名） */
+export function foreignProjectName(rec: GenerationRecord): string {
+  const base = (rec.projectPath || "").split(/[\\/]/).pop() || "";
+  const dot = base.lastIndexOf(".");
+  const name = dot > 0 ? base.slice(0, dot) : base;
+  return name || "未知工程";
+}
+
 export interface RecordActionsApi {
   selectedId: RefAny<string | null>;
-  selected: RefAny<GenerationRecord | null>;
-  isPlaying: RefAny<boolean>;
-  mainVideoRef: RefAny<HTMLVideoElement | null>;
-  togglePlay: () => void;
+  playingId: RefAny<string | null>;
+  sortedRecords: RefAny<GenerationRecord[]>;
+  /** 缩略图点击：设置选中 + 通知外部 */
   pick: (rec: GenerationRecord) => void;
   statusOf: (rec: GenerationRecord) => { label: string; color: string };
-  failedCardClass: RefAny<string>;
-  failedTitle: RefAny<string>;
-  errorTypeLabel: RefAny<string>;
-  canRetrySelected: RefAny<boolean>;
-  canUpgradeTo2K: RefAny<boolean>;
-  generatingElapsed: RefAny<string>;
-  sortedRecords: RefAny<GenerationRecord[]>;
-  /** 拖拽处理器（绑定到模板的 dragstart/dragover/dragend） */
-  bindDragHandlers: () => {
+  failedCardClassOf: (rec: GenerationRecord) => string;
+  failedTitleOf: (rec: GenerationRecord) => string;
+  errorTypeLabelOf: (rec: GenerationRecord) => string;
+  canRetryOf: (rec: GenerationRecord) => boolean;
+  canUpgradeTo2KOf: (rec: GenerationRecord) => boolean;
+  generatingElapsedOf: (rec: GenerationRecord) => string;
+  /** 拖拽处理器（按记录闭包；绑定到该记录视频元素的 dragstart/dragover/dragend） */
+  bindDragHandlers: (rec: GenerationRecord) => {
     onDragStart: (e: DragEvent) => void;
     onDragOver: (e: DragEvent) => void;
     onDragEnd: (e: DragEvent) => void;
   };
-  /** 主操作发射器（导入到工程 / 填入生成器 / 删除 / 升级 / 用作参考） */
-  emitImportSelected: () => void;
-  emitRetrySelected: () => void;
-  emitDeleteSelected: () => void;
-  emitUpgradeSelected: () => void;
+  emitImport: (rec: GenerationRecord) => void;
+  emitRetry: (rec: GenerationRecord) => void;
+  emitUpgrade: (rec: GenerationRecord) => void;
   emitUseAsReference: (rec: GenerationRecord) => void;
 }
 
@@ -59,25 +81,24 @@ export function useRecordActions(
     onUseAsReference: (rec: GenerationRecord) => void;
   },
 ): RecordActionsApi {
-  // ---- 选中状态 ----
+  // ---- 选中状态（缩略图跳转高亮 + 外部 @select 用；信息流不依赖它渲染详情） ----
   const selectedId = ref<string | null>(
     initialSelectedId || records()[0]?.id || null,
   );
 
-  // 记录数组变化时若当前选中的记录丢失，自动跳到第一条
+  // 记录数组变化时若当前选中的记录丢失，自动回退到第一条
   watch(
     () => records(),
     (rs) => {
-      if (!selectedId.value || !rs.find((r) => r.id === selectedId.value)) {
+      if (selectedId.value && !rs.find((r) => r.id === selectedId.value)) {
         selectedId.value = rs[0]?.id || null;
       }
     },
     { immediate: true },
   );
 
-  const selected = computed(
-    () => records().find((r) => r.id === selectedId.value) || null,
-  );
+  // ---- 播放互斥：一个块开始播放时，其它块收到 playingId 变化自行暂停 ----
+  const playingId = ref<string | null>(null);
 
   const sortedRecords = computed(() =>
     [...records()].sort(
@@ -86,20 +107,28 @@ export function useRecordActions(
     ),
   );
 
-  // ---- 视频播放控制 ----
-  const mainVideoRef = ref<HTMLVideoElement | null>(null);
-  const isPlaying = ref(false);
-  function togglePlay() {
-    const v = mainVideoRef.value;
-    if (!v) return;
-    if (v.paused) v.play().catch(() => {});
-    else v.pause();
+  // ---- 生成中已耗时：任一记录在生成时启动全局 1s tick（驱动所有块的耗时刷新） ----
+  const tick = ref(0);
+  let tickTimer: any = null;
+  function startTick() {
+    if (tickTimer) return;
+    tickTimer = setInterval(() => {
+      tick.value++;
+    }, 1000);
   }
-  watch(selectedId, () => {
-    isPlaying.value = false;
-    const v = mainVideoRef.value;
-    if (v && !v.paused) v.pause();
-  });
+  function stopTick() {
+    if (tickTimer) clearInterval(tickTimer);
+    tickTimer = null;
+  }
+  watch(
+    () => records().some((r) => r.status === "generating"),
+    (anyGenerating) => {
+      if (anyGenerating) startTick();
+      else stopTick();
+    },
+    { immediate: true },
+  );
+  onBeforeUnmount(stopTick);
 
   // ---- 状态展示 ----
   function statusOf(rec: GenerationRecord): { label: string; color: string } {
@@ -148,30 +177,29 @@ export function useRecordActions(
     },
   };
 
-  const failedCardClass = computed(() => {
-    const t = selected.value?.error?.errorType;
+  function failedCardClassOf(rec: GenerationRecord): string {
+    const t = rec.error?.errorType;
     return ERROR_TYPE_LABELS[t || ""]?.cls || "failed-card-generic";
-  });
+  }
 
-  const failedTitle = computed(() => {
-    const t = selected.value?.error?.errorType;
+  function failedTitleOf(rec: GenerationRecord): string {
+    const t = rec.error?.errorType;
     if (t && ERROR_TYPE_LABELS[t]) return ERROR_TYPE_LABELS[t].title;
-    if (selected.value?.error?.httpStatus === 402) return "💰 余额不足";
-    if (selected.value?.error?.httpStatus === 401) return "🔑 鉴权失败";
+    if (rec.error?.httpStatus === 402) return "💰 余额不足";
+    if (rec.error?.httpStatus === 401) return "🔑 鉴权失败";
     return "生成失败";
-  });
+  }
 
-  const errorTypeLabel = computed(() => {
-    const t = selected.value?.error?.errorType;
+  function errorTypeLabelOf(rec: GenerationRecord): string {
+    const t = rec.error?.errorType;
     return t ? `错误类型: ${t}` : "";
-  });
+  }
 
-  const canRetrySelected = computed(() => {
-    if (!selected.value) return false;
-    return !!selected.value.workFile || !!selected.value.prompt;
-  });
+  function canRetryOf(rec: GenerationRecord): boolean {
+    return !!rec.workFile || !!rec.prompt;
+  }
 
-  // ---- 升级 2K 判定 ----
+  // ---- 升级 2K 判定（逐记录） ----
   /**
    * 是否允许对此记录发起"像素提升到 2K"：
    *  - 模型必须具备 resolutionUpscale capability（按 provider + modelId 查）
@@ -183,85 +211,38 @@ export function useRecordActions(
    * 用 DEFAULT_PROVIDER_ID 兜底；保留 model === "MiniMax-H3" 作为兼容硬编码 fallback，
    * 避免破坏 Task 1-2 之前生成的极旧记录。
    */
-  const canUpgradeTo2K = computed(() => {
-    const r = selected.value;
-    if (!r) return false;
-    if (r.status !== "generated" && r.status !== "imported") return false;
-    if (r.params.resolution !== "768P") return false;
-    if (!r.taskId) return false;
+  function canUpgradeTo2KOf(rec: GenerationRecord): boolean {
+    if (rec.status !== "generated" && rec.status !== "imported") return false;
+    if (rec.params.resolution !== "768P") return false;
+    if (!rec.taskId) return false;
     // 按 provider + modelId 的 capability 判断
-    const provider = getProviderSync(r.params.provider || DEFAULT_PROVIDER_ID);
+    const provider = getProviderSync(rec.params.provider || DEFAULT_PROVIDER_ID);
     if (!provider) {
       // 没有对应 provider 实例：保留旧 hardcode 兼容（仅 MiniMax-H3）
-      return r.params.model === "MiniMax-H3";
+      return rec.params.model === "MiniMax-H3";
     }
-    const model = provider.models.find((m) => m.modelId === r.params.model);
+    const model = provider.models.find((m) => m.modelId === rec.params.model);
     if (!model) {
-      return r.params.model === "MiniMax-H3";
+      return rec.params.model === "MiniMax-H3";
     }
     return model.capabilities.includes("resolutionUpscale" as VideoGenCapability);
-  });
-
-  // ---- 生成中已耗时（每秒 tick 触发 reactive） ----
-  const tick = ref(0);
-  let tickTimer: any = null;
-  function startTick() {
-    if (tickTimer) return;
-    tickTimer = setInterval(() => {
-      tick.value++;
-    }, 1000);
   }
-  function stopTick() {
-    if (tickTimer) clearInterval(tickTimer);
-    tickTimer = null;
-  }
-  watch(
-    () => selected.value?.status,
-    (s) => {
-      if (s === "generating") startTick();
-      else stopTick();
-    },
-    { immediate: true },
-  );
-  onBeforeUnmount(stopTick);
 
-  const generatingElapsed = computed(() => {
-    const rec = selected.value;
+  function generatingElapsedOf(rec: GenerationRecord): string {
     if (!rec?.submittedAt || rec.status !== "generating") return "";
-    void tick.value;
+    void tick.value; // 读取 tick 驱动模板重渲染
     const ms = Date.now() - new Date(rec.submittedAt).getTime();
     const sec = Math.floor(ms / 1000);
     if (sec < 60) return `${sec}s`;
     return `${Math.floor(sec / 60)}m${sec % 60}s`;
-  });
-
-  // ---- 操作发射器 ----
-  function pick(rec: GenerationRecord) {
-    selectedId.value = rec.id;
-    handlers.onSelect(rec);
-  }
-  function emitImportSelected() {
-    if (selected.value) handlers.onImportToProject([selected.value.id]);
-  }
-  function emitRetrySelected() {
-    if (selected.value) handlers.onRetry(selected.value);
-  }
-  function emitDeleteSelected() {
-    if (selected.value) handlers.onDelete(selected.value.id);
-  }
-  function emitUpgradeSelected() {
-    if (selected.value) handlers.onUpgrade(selected.value);
-  }
-  function emitUseAsReference(rec: GenerationRecord) {
-    handlers.onUseAsReference(rec);
   }
 
-  // ---- 拖拽到 PR 时间线 ----
+  // ---- 拖拽到 PR 时间线（逐记录闭包） ----
   let dragStartedAt = 0;
   let dragDropEffect: string | null = null;
 
-  function onDragStart(e: DragEvent) {
-    if (!selected.value?.workFile) {
+  function onDragStart(rec: GenerationRecord, e: DragEvent) {
+    if (!rec.workFile) {
       e.preventDefault();
       return;
     }
@@ -269,13 +250,13 @@ export function useRecordActions(
     dragDropEffect = null;
     const dt = e.dataTransfer;
     if (!dt) return;
-    const nativePath = selected.value.workFile;
+    const nativePath = rec.workFile;
     const fileUrl = `file://${nativePath.replace(/ /g, "%20")}`;
 
     // 只传路径（仿 Finder 拖拽）
     dt.setData("text/uri-list", fileUrl);
     dt.setData("text/plain", fileUrl);
-    dt.setData("text/x-rocx-record-id", selected.value.id);
+    dt.setData("text/x-rocx-record-id", rec.id);
 
     dt.effectAllowed = "copy";
     dt.dropEffect = "copy";
@@ -285,9 +266,9 @@ export function useRecordActions(
     if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
   }
 
-  function onDragEnd(e: DragEvent) {
+  function onDragEnd(rec: GenerationRecord, e: DragEvent) {
     dragDropEffect = e.dataTransfer?.dropEffect ?? null;
-    if (!selected.value?.workFile) return;
+    if (!rec.workFile) return;
     if (Date.now() - dragStartedAt < 120) return;
     const accepted = ["copy", "move", "link"].includes(dragDropEffect ?? "");
     if (!accepted) {
@@ -295,36 +276,54 @@ export function useRecordActions(
       const ok = confirm(
         `未拖到 PR 时间线。是否改为导入到工程（出现在 Project 面板，不插入时间线）？`,
       );
-      if (ok && selected.value) {
-        handlers.onImportToProject([selected.value.id]);
+      if (ok) {
+        handlers.onImportToProject([rec.id]);
       }
     }
   }
 
-  function bindDragHandlers() {
-    return { onDragStart, onDragOver, onDragEnd };
+  function bindDragHandlers(rec: GenerationRecord) {
+    return {
+      onDragStart: (e: DragEvent) => onDragStart(rec, e),
+      onDragOver,
+      onDragEnd: (e: DragEvent) => onDragEnd(rec, e),
+    };
+  }
+
+  // ---- 操作发射器（逐记录） ----
+  function pick(rec: GenerationRecord) {
+    selectedId.value = rec.id;
+    handlers.onSelect(rec);
+  }
+  function emitImport(rec: GenerationRecord) {
+    handlers.onImportToProject([rec.id]);
+  }
+  function emitRetry(rec: GenerationRecord) {
+    handlers.onRetry(rec);
+  }
+  function emitUpgrade(rec: GenerationRecord) {
+    handlers.onUpgrade(rec);
+  }
+  function emitUseAsReference(rec: GenerationRecord) {
+    handlers.onUseAsReference(rec);
   }
 
   return {
     selectedId,
-    selected,
-    isPlaying,
-    mainVideoRef,
-    togglePlay,
+    playingId,
+    sortedRecords,
     pick,
     statusOf,
-    failedCardClass,
-    failedTitle,
-    errorTypeLabel,
-    canRetrySelected,
-    canUpgradeTo2K,
-    generatingElapsed,
-    sortedRecords,
+    failedCardClassOf,
+    failedTitleOf,
+    errorTypeLabelOf,
+    canRetryOf,
+    canUpgradeTo2KOf,
+    generatingElapsedOf,
     bindDragHandlers,
-    emitImportSelected,
-    emitRetrySelected,
-    emitDeleteSelected,
-    emitUpgradeSelected,
+    emitImport,
+    emitRetry,
+    emitUpgrade,
     emitUseAsReference,
   };
 }

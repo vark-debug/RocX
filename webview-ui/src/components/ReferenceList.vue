@@ -1,16 +1,18 @@
 <script setup lang="ts">
-import { computed } from "vue";
 import type { ReferenceItem, FileKind } from "@shared/messages";
 
-const props = defineProps<{
+/**
+ * 纯参考素材列表（无标题/无抓素材按钮——按钮已上移到模式 tab 工具行）。
+ * 生成模式差异由父级控制传参，本组件只负责展示与移除/确认。
+ */
+defineProps<{
   references: ReferenceItem[];
+  /** 素材限制提示文案（随生成模式变化，由父级传入） */
+  tips?: string;
 }>();
 const emit = defineEmits<{
-  "update:references": [ReferenceItem[]];
-  add: [FileKind];
-  captureFrame: [];
-  captureVideo: [];
   remove: [number];
+  confirmPending: [number];
 }>();
 
 function kindOf(ref: ReferenceItem): FileKind {
@@ -25,6 +27,8 @@ function iconOf(ref: ReferenceItem): string {
 function statusOf(ref: ReferenceItem): string {
   // 阶段 2：webview 标记的上传中（明确不会持久化到磁盘）
   if (ref.uploading) return "上传中…";
+  // 抓帧→PS 路径：等待用户点「修改完成」
+  if (ref.pendingUpload) return "✏ PS 中";
   // 阶段 3：上传完成（fileId 已设置）
   if (ref.fileId && ref.uploadedAt) {
     const age = Date.now() - new Date(ref.uploadedAt).getTime();
@@ -34,18 +38,16 @@ function statusOf(ref: ReferenceItem): string {
   // 阶段 1：导出完成（本地文件已生成，fileId 还没回填）
   return "已就绪";
 }
+
+/** 是否在 ref-item 行内显示「修改完成」按钮（pendingUpload 且不在上传中） */
+function showConfirmPending(ref: ReferenceItem): boolean {
+  return !!ref.pendingUpload && !ref.uploading;
+}
 </script>
 
 <template>
-  <section class="reference-section">
-    <div class="ref-header">
-      <span class="title">参考素材 ({{ references.length }})</span>
-      <div class="add-buttons">
-        <button @click="emit('captureVideo')" type="button" class="add-btn">🎬 抓视频</button>
-        <button @click="emit('captureFrame')" type="button" class="add-btn">🖼 抓帧</button>
-      </div>
-    </div>
-    <div v-if="references.length > 0" class="ref-list">
+  <section v-if="references.length > 0" class="reference-section">
+    <div class="ref-list">
       <div
         v-for="(ref, idx) in references"
         :key="idx"
@@ -62,9 +64,16 @@ function statusOf(ref: ReferenceItem): string {
         </div>
         <span class="ref-name" :title="ref.localPath">{{ ref.fileName }}</span>
         <span class="ref-status">{{ statusOf(ref) }}</span>
+        <button
+          v-if="showConfirmPending(ref)"
+          class="ref-done-btn"
+          @click="emit('confirmPending', idx)"
+          type="button"
+          title="在 PS 中修改完成后点这里，确认上传到 MiniMax"
+        >修改完成</button>
         <button class="remove-btn" @click="emit('remove', idx)" type="button">×</button>
       </div>
-      <div class="ref-tips">视频≤3 总时长≤15s · 图片≤9</div>
+      <div class="ref-tips">{{ tips }}</div>
     </div>
   </section>
 </template>
@@ -75,37 +84,8 @@ function statusOf(ref: ReferenceItem): string {
   flex-shrink: 0;
 }
 
-.ref-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  .title {
-    font-size: 11px;
-    font-weight: 500;
-    opacity: 0.8;
-  }
-}
-
-.add-buttons {
-  display: flex;
-  gap: 2px;
-}
-
-.add-btn {
-  padding: 2px 6px;
-  font-size: 10px;
-  background: var(--uxp-host-border-color, #383838);
-  color: inherit;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  &:hover {
-    background: var(--uxp-host-widget-hover-background-color, #3d3d3d);
-  }
-}
-
 .ref-list {
-  margin-top: 4px;
+  margin-top: 2px;
 }
 
 .ref-item {
@@ -152,6 +132,20 @@ function statusOf(ref: ReferenceItem): string {
 .ref-status {
   font-size: 10px;
   opacity: 0.7;
+}
+
+.ref-done-btn {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  background: #2e7d32;
+  color: #fff;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover {
+    background: #1b5e20;
+  }
 }
 
 .remove-btn {

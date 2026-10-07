@@ -7,14 +7,16 @@
 import { getUxPProvider } from "./providers/registry";
 
 export const uploadCore = {
-  /** 把 File token 上传到当前 provider（默认 minimax） */
+  /** 把 File token 上传到指定 provider 的文件接口（缺省回落默认 provider） */
   async uploadFile(args: {
     apiKey: string;
     fileToken: any;
     fileName: string;
     contentType?: string;
+    /** 目标 provider id；缺省回落 DEFAULT_UXP_PROVIDER_ID（当前为 minimax） */
+    providerId?: string;
   }): Promise<{ ok: boolean; fileId?: string; error?: string }> {
-    const provider = getUxPProvider(); // 默认 minimax；后续 api.ts 可传入 providerId
+    const provider = getUxPProvider(args.providerId);
     return await provider.uploadFile({
       apiKey: args.apiKey,
       fileToken: args.fileToken,
