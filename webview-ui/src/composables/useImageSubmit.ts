@@ -17,9 +17,16 @@ import { inject } from "vue";
 import { bridge } from "../services/bridge";
 import {
   getImageProviderSync,
+  listImageProviders,
   DEFAULT_IMAGE_PROVIDER_ID,
 } from "../providers/core/registry";
-import { ratioToSize, billingTierOf, clampToApiMax } from "../providers/runninghub/wireFormat";
+import {
+  ratioToSize,
+  billingTierOf,
+  clampToApiMax,
+  IMAGE_1K_MAX_PIXELS,
+} from "../providers/runninghub/wireFormat";
+import { ARK_1K_MAX_PIXELS } from "../providers/ark/wireFormat";
 import { resetCaptureContext } from "./useCaptureContext";
 import { safeProviderCall } from "./useProviderSafe";
 import { SharedRefsKey } from "../providers/state";
@@ -54,9 +61,14 @@ export function useImageSubmit(opts: {
 
   // ---------- 提交图片生成 ----------
   async function submitImageGenerate() {
-    const apiKey = await bridge.getApiKey(DEFAULT_IMAGE_PROVIDER_ID);
+    // 多图片 provider：按当前选中模型推导所属 provider（选中即路由），未命中回落默认
+    const imageProviderId =
+      listImageProviders().find((p) =>
+        p.models.some((m) => m.modelId === opts.imageModel.value),
+      )?.providerId ?? DEFAULT_IMAGE_PROVIDER_ID;
+    const apiKey = await bridge.getApiKey(imageProviderId);
     if (!apiKey) {
-      opts.showToast("请在设置里配置 RunningHub API Key");
+      opts.showToast(`请在设置里配置 ${imageProviderId === "ark" ? "火山方舟" : "RunningHub"} API Key`);
       return;
     }
     const owner = await opts.resolveSubmitOwner();
@@ -64,7 +76,7 @@ export function useImageSubmit(opts: {
       opts.showToast("无活动 PR 项目，无法记录生成历史");
       return;
     }
-    const provider = getImageProviderSync(DEFAULT_IMAGE_PROVIDER_ID);
+    const provider = getImageProviderSync(imageProviderId);
     if (!provider) {
       opts.showToast("图片 provider 未注册");
       return;
@@ -132,8 +144,11 @@ export function useImageSubmit(opts: {
       outWidth = size.width;
       outHeight = size.height;
     }
-    // 计价档位由输出像素总数决定（≤ 236 万像素 → 1K，否则 2K）
-    const billingTier = billingTierOf(outWidth, outHeight);
+    // 计价档位由输出像素总数决定；1K 分界像素各 provider 不同
+    // （RunningHub 236 万 / Ark 261 万），按当前 provider 选用阈值
+    const tierThreshold =
+      imageProviderId === "ark" ? ARK_1K_MAX_PIXELS : IMAGE_1K_MAX_PIXELS;
+    const billingTier = billingTierOf(outWidth, outHeight, tierThreshold);
 
     const newRec: GenerationRecord = {
       id,
@@ -145,7 +160,7 @@ export function useImageSubmit(opts: {
         ratio: opts.imageRatio.value as GenerationRecord["params"]["ratio"],
         duration: 0,
         resolution: billingTier,
-        provider: DEFAULT_IMAGE_PROVIDER_ID,
+        provider: imageProviderId,
       },
       imageParams: {
         width: outWidth,
@@ -154,7 +169,8 @@ export function useImageSubmit(opts: {
         outputFormat: "png",
       },
       references: imageRefs,
-      status: "pending",
+      // 同步生成型 provider（如 Ark，无轮询）：直接进入 generating 展示伪计时，跳过排队态
+      status: provider.syncGeneration ? "generating" : "pending",
       submittedAt: now,
       projectGuid: owner.guid,
       projectPath: owner.path,

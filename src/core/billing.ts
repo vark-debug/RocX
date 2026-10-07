@@ -24,16 +24,24 @@ export const PRICE_BY_RESOLUTION: Record<string, number> = {
 };
 
 /**
- * 图片生成档位单价(元/张,单次生成 1 张),按尺寸档位取值;
+ * 图片生成档位单价(元/张,单次生成 1 张),按 provider → 尺寸档位两级取值;
  * 与视频表分开:口径不同(每张 vs 每秒),勿合并。
+ * 档位分界像素各 provider 不同(RunningHub 236 万 / Ark 261 万),
+ * 由 webview 侧 billingTierOf(…, threshold) 按当前 provider 定档后写入记录。
  */
-export const IMAGE_PRICE_BY_RESOLUTION: Record<string, number> = {
-  "2K": 0.54,
-  "1K": 0.27,
+export const IMAGE_PRICE_BY_RESOLUTION: Record<string, Record<string, number>> = {
+  runninghub: { "2K": 0.54, "1K": 0.27 },
+  ark: { "2K": 0.6, "1K": 0.3 },
 };
 
-/** 图生图输入图单价(元/张):首张免费,从第 2 张起按此计价 */
-export const IMAGE_INPUT_UNIT_PRICE = 0.018;
+/** 图片价格回落 provider（老记录缺 params.provider / 未知 provider 时） */
+const DEFAULT_IMAGE_PRICE_PROVIDER = "runninghub";
+
+/** 图生图输入图单价(元/张,按 provider):首张免费,从第 2 张起按此计价 */
+export const IMAGE_INPUT_UNIT_PRICE: Record<string, number> = {
+  runninghub: 0.018,
+  ark: 0.02,
+};
 
 /** 分辨率升级任务(768P → 2K)单独一档 */
 export const UPGRADE_UNIT_PRICE = 0.3;
@@ -79,13 +87,22 @@ export function estimateCost(
   }
 
   // 图片生成:生成费按尺寸档位每张计价(不走时长公式,图片记录 duration 恒为 0);
-  // 图生图输入图:首张免费,后续每张加收
+  // 图生图输入图:首张免费,后续每张加收。单价按记录锁定的 provider 取子表,
+  // 缺 provider(老记录)/未知 provider 回落 runninghub
   if (purpose === REPORT_PURPOSE.IMAGE_GEN) {
-    const base = IMAGE_PRICE_BY_RESOLUTION[record.params?.resolution] ?? 0;
+    const priceProvider =
+      record.params?.provider || DEFAULT_IMAGE_PRICE_PROVIDER;
+    const priceTable =
+      IMAGE_PRICE_BY_RESOLUTION[priceProvider] ??
+      IMAGE_PRICE_BY_RESOLUTION[DEFAULT_IMAGE_PRICE_PROVIDER];
+    const base = priceTable[record.params?.resolution] ?? 0;
+    const inputUnit =
+      IMAGE_INPUT_UNIT_PRICE[priceProvider] ??
+      IMAGE_INPUT_UNIT_PRICE[DEFAULT_IMAGE_PRICE_PROVIDER];
     const inputCount = (record.references || []).filter(
       (r) => r.type === "reference_image",
     ).length;
-    const inputCost = Math.max(0, inputCount - 1) * IMAGE_INPUT_UNIT_PRICE;
+    const inputCost = Math.max(0, inputCount - 1) * inputUnit;
     return round(base + inputCost);
   }
 

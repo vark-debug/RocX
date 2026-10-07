@@ -23,12 +23,13 @@ import {
   getProviderSync,
   listProviders,
   registerImageProvider,
-  getImageProviderSync,
+  listImageProviders,
   DEFAULT_PROVIDER_ID,
   DEFAULT_IMAGE_PROVIDER_ID,
 } from "./providers/core/registry";
 import { minimaxProvider } from "./providers/minimax";
 import { runningHubProvider } from "./providers/runninghub";
+import { arkProvider } from "./providers/ark";
 import type { ModelDescriptor } from "./providers/core/types";
 import type { VideoGenProvider } from "./providers/core/VideoGenProvider";
 
@@ -121,9 +122,22 @@ async function refreshImageSeqSize() {
 watch(generationMode, (mode) => {
   if (mode === "image") void refreshImageSeqSize();
 });
-/** 图片 provider 实例（mount 时注册后取用） */
-const currentImageProvider = ref<import("./providers/core/ImageGenProvider").ImageGenProvider | null>(null);
-const imageModels = computed<ModelDescriptor[]>(() => currentImageProvider.value?.models ?? []);
+/** 已注册图片 provider 列表（响应式：mount 注册后更新；模型下拉聚合所有 provider 的模型） */
+const imageProviderList = ref<import("./providers/core/ImageGenProvider").ImageGenProvider[]>([]);
+const imageModels = computed<ModelDescriptor[]>(() =>
+  imageProviderList.value.flatMap((p) => p.models),
+);
+
+/**
+ * 按当前选中的图片 modelId 推导所属图片 provider id（多图片 provider：选中即路由）。
+ * 未命中（异常态）回落默认图片 provider。
+ */
+function resolveImageProviderId(): string {
+  const hit = listImageProviders().find((p) =>
+    p.models.some((m) => m.modelId === imageModel.value),
+  );
+  return hit?.providerId ?? DEFAULT_IMAGE_PROVIDER_ID;
+}
 
 // ---------- provide: 共享 refs 给 composables(V5.2) ----------
 // 10 个高频 ref 集中暴露给 useGenerationState / useSubmit / useImport 等
@@ -265,10 +279,10 @@ const refsApi = useReferences({
   ratio,
   getModelId: () => model.value,
   currentProviderId,
-  // 素材上传目标按当前生成模式分流：图片模式 → runninghub，视频模式 → 视频侧 provider
+  // 素材上传目标按当前生成模式分流：图片模式 → 当前选中图片模型所属 provider，视频模式 → 视频侧 provider
   resolveUploadProviderId: () =>
     generationMode.value === "image"
-      ? DEFAULT_IMAGE_PROVIDER_ID
+      ? resolveImageProviderId()
       : currentProviderId.value,
   findModelDescriptor,
   // 抓帧只在视频模式下智能填写比例（写 opts.ratio 是视频表单，图片模式不可误写）
@@ -308,9 +322,10 @@ onMounted(async () => {
   if (!listProviders().find((p) => p.providerId === DEFAULT_PROVIDER_ID)) {
     registerProvider(minimaxProvider);
   }
-  // 注册图片 provider（RunningHub）
+  // 注册图片 provider（RunningHub + 火山方舟），刷新聚合模型列表
   registerImageProvider(runningHubProvider);
-  currentImageProvider.value = getImageProviderSync(DEFAULT_IMAGE_PROVIDER_ID);
+  registerImageProvider(arkProvider);
+  imageProviderList.value = listImageProviders();
   // 异步获取当前 provider 实例
   currentProvider.value = await getProvider(currentProviderId.value);
   // 按当前视频 provider 读分槽 key(存储层对默认 provider 回落旧单 key);
@@ -478,9 +493,9 @@ async function refreshProject() {
         <div class="prompt-divider"></div>
         <ImagePromptInput
           v-model:prompt="imagePrompt"
+          v-model:model="imageModel"
           v-model:ratio="imageRatio"
           v-model:size="imageSize"
-          :model="imageModel"
           :models="imageModels"
           :seq-size="imageSeqSize"
           @generate="onImageGenerate"

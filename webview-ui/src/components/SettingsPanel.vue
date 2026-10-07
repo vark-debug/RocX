@@ -17,6 +17,7 @@ const emit = defineEmits<{
 const KEY_PROVIDERS = [
   { id: "minimax", label: "MiniMax" },
   { id: "runninghub", label: "RunningHub" },
+  { id: "ark", label: "火山方舟" },
 ] as const;
 
 const providerId = ref<string>(props.initialProviderId || "minimax");

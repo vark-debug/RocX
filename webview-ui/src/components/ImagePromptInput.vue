@@ -22,6 +22,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:prompt": [string];
+  "update:model": [string];
   "update:ratio": [ImageRatio];
   "update:size": [ImageSize];
   generate: [];
@@ -31,6 +32,22 @@ const ratios: ImageRatio[] = ["1:1", "4:3", "3:4", "16:9", "9:16"];
 const sizes: ImageSize[] = ["智能", "1K", "2K"];
 
 const paramsPopoverOpen = ref(false);
+const modelPopoverOpen = ref(false);
+
+function toggleModelPopover() {
+  modelPopoverOpen.value = !modelPopoverOpen.value;
+  if (modelPopoverOpen.value) paramsPopoverOpen.value = false;
+}
+
+function toggleParamsPopover() {
+  paramsPopoverOpen.value = !paramsPopoverOpen.value;
+  if (paramsPopoverOpen.value) modelPopoverOpen.value = false;
+}
+
+function pickModel(modelId: string) {
+  emit("update:model", modelId);
+  modelPopoverOpen.value = false;
+}
 
 const currentModelLabel = computed(() => {
   const m = props.models.find((x) => x.modelId === props.model);
@@ -55,10 +72,6 @@ const canSubmit = computed(() => !!props.prompt.trim());
 
 const submitLabel = computed(() => (canSubmit.value ? "生成" : "生成"));
 
-function toggleParamsPopover() {
-  paramsPopoverOpen.value = !paramsPopoverOpen.value;
-}
-
 function onSubmitClick() {
   if (canSubmit.value) emit("generate");
 }
@@ -79,6 +92,7 @@ function onSubmitClick() {
         class="param-toggle model-btn"
         type="button"
         :title="'当前模型: ' + currentModelLabel"
+        @click="toggleModelPopover"
       >
         {{ currentModelLabel }}
       </button>
@@ -93,6 +107,28 @@ function onSubmitClick() {
       >
         {{ submitLabel }}
       </button>
+
+      <!-- 模型切换 popover（向上展开：聚合所有图片 provider 的模型） -->
+      <div v-if="modelPopoverOpen" class="param-popover models-popover" @click.stop>
+        <div class="group-label">模型</div>
+        <div class="radio-row">
+          <label
+            v-for="m in models"
+            :key="m.modelId"
+            class="radio-item"
+            :class="{ active: model === m.modelId }"
+            :title="m.description || m.displayName"
+          >
+            <input
+              type="radio"
+              :value="m.modelId"
+              :checked="model === m.modelId"
+              @change="pickModel(m.modelId)"
+            />
+            <span>{{ m.displayName }}</span>
+          </label>
+        </div>
+      </div>
 
       <!-- 图片参数 popover（向上展开：宽高比 / 尺寸 / 张数） -->
       <div v-if="paramsPopoverOpen" class="param-popover params-popover" @click.stop>
@@ -221,6 +257,11 @@ function onSubmitClick() {
 .params-popover {
   left: 0;
   right: 0;
+}
+
+.models-popover {
+  left: 0;
+  min-width: 180px;
 }
 
 .radio-row {

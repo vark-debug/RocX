@@ -23,6 +23,12 @@ export interface ImageGenProvider {
   /** 此 provider 提供的图片模型列表（capabilities 需含 "imageGeneration"） */
   readonly models: ModelDescriptor[];
 
+  /**
+   * 同步生成型 provider（如 Ark：createImage 内部直接等待出图，无 taskId/轮询）。
+   * 为 true 时提交记录直接进入 generating 状态（展示伪计时），跳过 pending(排队) 阶段。
+   */
+  readonly syncGeneration?: boolean;
+
   /** 生成鉴权头 */
   buildAuthHeaders(apiKey: string): Record<string, string>;
 

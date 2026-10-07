@@ -118,6 +118,9 @@ const manifest: UXP_Manifest = {
         "https://www.runninghub.cn",
         // RunningHub 生成结果 COS 下载（区域/桶名不固定：ap-beijing/ap-guangzhou 等，通配覆盖）
         "https://*.myqcloud.com",
+        // 火山方舟 Ark 图片 provider：API（ark.cn-beijing.volces.com）+ 生成结果 CDN
+        // （ark-content-generation-*.tos-*.volces.com），通配覆盖
+        "https://*.volces.com",
         // 飞书多维表格自动化 webhook（租户级子域名，如 xxx.feishu.cn，必须通配）
         "https://*.feishu.cn",
         // 钉钉连接器 webhook（测试用）
@@ -144,6 +147,8 @@ const manifest: UXP_Manifest = {
         "https://algeng-video-infer.oss-cn-shanghai.aliyuncs.com",
         // RunningHub 图片 provider：webview 侧 createImage / queryTask fetch
         "https://www.runninghub.cn",
+        // 火山方舟 Ark 图片 provider：webview 侧 createImage fetch（同步 API）+ 结果 CDN
+        "https://*.volces.com",
       ],
       enableMessageBridge: "localAndRemote",
     },

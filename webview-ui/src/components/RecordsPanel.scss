@@ -13,7 +13,9 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 6px 4px;
+  /* 底部 padding 让出浮动 prompt 栏（与 .feed-column 同值），
+     避免最后几个缩略图被遮挡；padding 计入滚动区域，不影响滚动逻辑 */
+  padding: 6px 4px 160px;
   overflow-y: auto;
   overflow-x: hidden;
   box-sizing: border-box;
@@ -69,8 +71,13 @@
   height: 100%;
   object-fit: cover;
   display: block;
-  /* 防止图片未加载完成时容器塌缩到 0（与 .thumb-item 的 aspect-ratio:16/9 配合即可） */
-  background: #000;
+  /* 透明底图用棋盘格衬底（PS 风格），否则黑字在黑底上看不清 */
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #cfcfcf 25%, transparent 25%, transparent 75%, #cfcfcf 75%),
+    linear-gradient(45deg, #cfcfcf 25%, transparent 25%, transparent 75%, #cfcfcf 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 8px 8px;
 }
 
 .thumb-placeholder {

@@ -34,9 +34,17 @@ export function ratioToSize(
   return base;
 }
 
-/** 按输出像素总数定计价档位：≤ 236 万 → "1K"，否则 → "2K" */
-export function billingTierOf(width: number, height: number): "1K" | "2K" {
-  return width * height <= IMAGE_1K_MAX_PIXELS ? "1K" : "2K";
+/**
+ * 按输出像素总数定计价档位：≤ 1K 上限 → "1K"，否则 → "2K"。
+ * 各 provider 的 1K 档位分界像素不同（RunningHub 236 万 / Ark 261 万），
+ * 由调用方传入 threshold；不传回落 RunningHub 口径（向后兼容）。
+ */
+export function billingTierOf(
+  width: number,
+  height: number,
+  threshold: number = IMAGE_1K_MAX_PIXELS,
+): "1K" | "2K" {
+  return width * height <= threshold ? "1K" : "2K";
 }
 
 /** 向下取偶数：整偶像素对编码器/采样更友好 */
