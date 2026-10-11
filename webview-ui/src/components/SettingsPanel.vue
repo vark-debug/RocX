@@ -1,6 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { bridge } from "../services/bridge";
+import {
+  usePromptTemplates,
+  PROMPT_TEMPLATES_MAX,
+} from "../composables/usePromptTemplates";
 
 declare const __ROCX_DEV__: boolean;
 
@@ -96,6 +100,46 @@ async function save() {
     message.value = `保存失败: ${r.error}`;
   }
 }
+
+// ---------- 提示词模板管理（"/" 触发；自定义上限 10 条） ----------
+const {
+  customTemplates,
+  ensureLoaded,
+  addCustomTemplate,
+  removeCustomTemplate,
+} = usePromptTemplates();
+const tplLabel = ref("");
+const tplTemplate = ref("");
+const tplScope = ref<"video" | "image" | "both">("both");
+const tplMessage = ref("");
+
+const tplAddDisabled = computed(
+  () =>
+    customTemplates.value.length >= PROMPT_TEMPLATES_MAX ||
+    !tplLabel.value.trim() ||
+    !tplTemplate.value.trim(),
+);
+
+function addTemplate() {
+  if (tplAddDisabled.value) return;
+  const ok = addCustomTemplate({
+    label: tplLabel.value.trim(),
+    template: tplTemplate.value,
+    scope: tplScope.value,
+  });
+  tplMessage.value = ok ? "✓ 已添加" : "添加失败（已达上限）";
+  if (ok) {
+    tplLabel.value = "";
+    tplTemplate.value = "";
+  }
+}
+
+function deleteTemplate(id: string) {
+  removeCustomTemplate(id);
+  tplMessage.value = "✓ 已删除";
+}
+
+onMounted(() => void ensureLoaded());
 
 // ---------- 仅 DEV 模式可见的调试工具 ----------
 // 通过 __ROCX_DEV__ 构建时常量控制：MODE=dev 时为 true，build/zip 时为 false，
@@ -200,6 +244,44 @@ function attachDebugHandlers(MiniMaxProvider: any) {
         </button>
       </div>
       <div v-if="feishuMessage" class="message">{{ feishuMessage }}</div>
+    </div>
+
+    <!-- 提示词模板管理：输入 "/" 唤起；自定义上限 10 条 -->
+    <div class="feishu-block">
+      <div class="feishu-title">
+        提示词模板
+        <span class="tpl-count">{{ customTemplates.length }}/{{ PROMPT_TEMPLATES_MAX }}</span>
+      </div>
+      <div class="tpl-syntax-hint">
+        语法：「甲或乙」视频模式取甲、图片模式取乙；{xxx} 插入后光标定位到该处并全选 xxx
+      </div>
+      <div v-if="customTemplates.length" class="tpl-list">
+        <div v-for="t in customTemplates" :key="t.id" class="tpl-row">
+          <span class="tpl-row-label">{{ t.label }}</span>
+          <span class="tpl-row-scope">{{ t.scope === 'video' ? '视频' : t.scope === 'image' ? '图片' : '通用' }}</span>
+          <span class="tpl-row-text">{{ t.template }}</span>
+          <button class="tpl-del-btn" type="button" @click="deleteTemplate(t.id)">删除</button>
+        </div>
+      </div>
+      <div v-else class="tpl-syntax-hint">暂无自定义模板</div>
+      <div class="settings-row">
+        <input v-model="tplLabel" type="text" placeholder="名称（如：移除物品）" class="input tpl-input-label" />
+        <select v-model="tplScope" class="input tpl-scope-select">
+          <option value="both">通用</option>
+          <option value="video">视频</option>
+          <option value="image">图片</option>
+        </select>
+      </div>
+      <div class="settings-row">
+        <input
+          v-model="tplTemplate"
+          type="text"
+          placeholder="模板内容，如：请移除「视频或图片」中的{某个物品}"
+          class="input"
+        />
+        <button @click="addTemplate" :disabled="tplAddDisabled" class="save-btn">添加</button>
+      </div>
+      <div v-if="tplMessage" class="message">{{ tplMessage }}</div>
     </div>
 
     <!-- DEV：生成工作目录与调试工具仅 dev 模式可见 -->
@@ -324,6 +406,90 @@ function attachDebugHandlers(MiniMaxProvider: any) {
     font-weight: 500;
     opacity: 0.85;
   }
+}
+
+/* 提示词模板管理 */
+.tpl-count {
+  font-weight: 400;
+  font-size: 10px;
+  opacity: 0.6;
+  margin-left: 4px;
+}
+
+.tpl-syntax-hint {
+  font-size: 10px;
+  line-height: 1.4;
+  opacity: 0.6;
+}
+
+.tpl-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tpl-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  padding: 2px 4px;
+  background: var(--uxp-host-background-color, #2b2b2b);
+  border-radius: 3px;
+}
+
+.tpl-row-label {
+  flex: 0 0 auto;
+  font-weight: 500;
+  color: var(--uxp-host-link-text-color, #4b9cf5);
+}
+
+.tpl-row-scope {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  opacity: 0.7;
+  border: 1px solid var(--uxp-host-border-color, #454545);
+  border-radius: 2px;
+}
+
+.tpl-row-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
+.tpl-del-btn {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  font-size: 10px;
+  background: transparent;
+  color: var(--uxp-host-text-color-secondary, #b0b0b0);
+  border: 1px solid var(--uxp-host-border-color, #454545);
+  border-radius: 3px;
+  cursor: pointer;
+  &:hover {
+    color: #ff6b6b;
+    border-color: #ff6b6b;
+  }
+}
+
+.tpl-input-label {
+  flex: 0 0 38%;
+}
+
+.tpl-scope-select {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 3px 4px;
+  font-size: 11px;
+  background: var(--uxp-host-background-color, #2b2b2b);
+  color: inherit;
+  border: 1px solid var(--uxp-host-border-color, #454545);
+  border-radius: 3px;
+  font-family: inherit;
 }
 
 .workdir-row {

@@ -28,6 +28,7 @@ import {
 } from "../providers/runninghub/wireFormat";
 import { ARK_1K_MAX_PIXELS } from "../providers/ark/wireFormat";
 import { resetCaptureContext } from "./useCaptureContext";
+import { matchTemplateGate } from "./usePromptTemplates";
 import { safeProviderCall } from "./useProviderSafe";
 import { SharedRefsKey } from "../providers/state";
 import type { GenerationRecord } from "@shared/messages";
@@ -61,10 +62,21 @@ export function useImageSubmit(opts: {
 
   // ---------- 提交图片生成 ----------
   async function submitImageGenerate() {
+    // 模板闸门：提示词与模板原样一致（未改 {xxx} 预填）时拦截
+    const gate = matchTemplateGate(opts.imagePrompt.value, "image");
+    if (gate) {
+      opts.showToast(
+        gate.anchor
+          ? `提示词与模板「${gate.label}」一致，请先修改模板中的「${gate.anchor}」再生成`
+          : `提示词与模板「${gate.label}」完全一致，请先修改后再生成`,
+      );
+      return;
+    }
+    const activeModelId = opts.imageModel.value;
     // 多图片 provider：按当前选中模型推导所属 provider（选中即路由），未命中回落默认
     const imageProviderId =
       listImageProviders().find((p) =>
-        p.models.some((m) => m.modelId === opts.imageModel.value),
+        p.models.some((m) => m.modelId === activeModelId),
       )?.providerId ?? DEFAULT_IMAGE_PROVIDER_ID;
     const apiKey = await bridge.getApiKey(imageProviderId);
     if (!apiKey) {
@@ -81,7 +93,7 @@ export function useImageSubmit(opts: {
       opts.showToast("图片 provider 未注册");
       return;
     }
-    const modelDesc = provider.models.find((m) => m.modelId === opts.imageModel.value);
+    const modelDesc = provider.models.find((m) => m.modelId === activeModelId);
     if (!modelDesc || !modelDesc.capabilities.includes("imageGeneration")) {
       opts.showToast("当前图片模型不支持生成");
       return;
@@ -156,7 +168,7 @@ export function useImageSubmit(opts: {
       prompt: opts.imagePrompt.value,
       kind: "image",
       params: {
-        model: opts.imageModel.value,
+        model: activeModelId,
         ratio: opts.imageRatio.value as GenerationRecord["params"]["ratio"],
         duration: 0,
         resolution: billingTier,
@@ -182,7 +194,7 @@ export function useImageSubmit(opts: {
     resetCaptureContext();
 
     const req: ImageGenCreateRequest = {
-      model: opts.imageModel.value,
+      model: activeModelId,
       prompt: newRec.prompt,
       ratio: opts.imageRatio.value,
       width: outWidth,

@@ -18,6 +18,7 @@ import { ref, inject } from "vue";
 import { bridge } from "../services/bridge";
 import { getProvider } from "../providers/core/registry";
 import { ensureRefsForProvider } from "./useEnsureRefs";
+import { matchTemplateGate } from "./usePromptTemplates";
 import { getCaptureContext, lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import { safeProviderCall } from "./useProviderSafe";
 import { SharedRefsKey } from "../providers/state";
@@ -124,6 +125,16 @@ export function useSubmit(opts: {
 
   // ---------- 提交生成 ----------
   async function submitGenerate() {
+    // 模板闸门：提示词与模板原样一致（未改 {xxx} 预填）时拦截
+    const gate = matchTemplateGate(shared.prompt.value, "video");
+    if (gate) {
+      opts.showToast(
+        gate.anchor
+          ? `提示词与模板「${gate.label}」一致，请先修改模板中的「${gate.anchor}」再生成`
+          : `提示词与模板「${gate.label}」完全一致，请先修改后再生成`,
+      );
+      return;
+    }
     const apiKey = shared.apiKey.value;
     if (!apiKey) return;
     const owner = await resolveSubmitOwner();

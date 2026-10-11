@@ -16,7 +16,11 @@ import { importCore } from "../core/import";
 import { framesCore } from "../core/frames";
 import { captureVideoCore } from "../core/captureVideo";
 import { getColorScheme, getUXPInfo, openURL } from "./uxp";
-import type { GenerationRecord, ReportPurpose } from "@shared/messages";
+import type {
+  GenerationRecord,
+  ReportPurpose,
+  PromptTemplate,
+} from "@shared/messages";
 
 const hostName =
   uxp?.host?.name.toLowerCase().replace(/\s/g, "") || ("" as string);
@@ -216,6 +220,14 @@ export const api = {
   },
   async setApiKey(key: string, providerId?: string) {
     return await storage.setApiKey(key, providerId);
+  },
+
+  // 提示词模板（自定义，全局持久化）
+  async getPromptTemplates() {
+    return await storage.getPromptTemplates();
+  },
+  async setPromptTemplates(list: PromptTemplate[]) {
+    return await storage.setPromptTemplates(list);
   },
 
   // 飞书多维表格联动
