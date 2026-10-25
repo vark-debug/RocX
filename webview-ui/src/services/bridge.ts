@@ -35,6 +35,8 @@ export const bridge = {
   getApiKey: (providerId?: string) => ensure().getApiKey({ providerId }),
   setApiKey: (k: string, providerId?: string) =>
     ensure().setApiKey(k, providerId),
+  getPromptTemplates: () => ensure().getPromptTemplates(),
+  setPromptTemplates: (list: any) => ensure().setPromptTemplates(list),
   getFeishuConfig: () => ensure().getFeishuConfig(),
   setFeishuConfig: (cfg: any) => ensure().setFeishuConfig(cfg),
   reportGenerated: (record: any, purpose?: any) =>

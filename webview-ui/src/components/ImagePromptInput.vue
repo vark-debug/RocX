@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
+import { ref, computed, nextTick } from "vue";
 import type { ModelDescriptor } from "../providers/core/types";
 import { describeRatio } from "../providers/runninghub/wireFormat";
+import { useTemplateTrigger } from "../composables/usePromptTemplates";
+import TemplatePopover from "./TemplatePopover.vue";
 
 /** 图片生成尺寸档位；"智能" = 跟随活动序列分辨率（提交时由 UXP 实时获取） */
 export type ImageSize = "1K" | "2K" | "智能";
@@ -75,17 +77,47 @@ const submitLabel = computed(() => (canSubmit.value ? "生成" : "生成"));
 function onSubmitClick() {
   if (canSubmit.value) emit("generate");
 }
+
+// ---------- 提示词模板（"/" 触发） ----------
+const promptTextarea = ref<HTMLTextAreaElement | null>(null);
+const tpl = useTemplateTrigger({
+  textareaRef: promptTextarea,
+  mode: "image",
+  onReplace: (next, selStart, selEnd) => {
+    emit("update:prompt", next);
+    // 等 :value 绑定回流后再定位光标（锚点处预填文本全选，打字即覆盖）
+    void nextTick(() => {
+      promptTextarea.value?.focus();
+      promptTextarea.value?.setSelectionRange(selStart, selEnd);
+    });
+  },
+});
+function onPromptInput(e: Event) {
+  emit("update:prompt", (e.target as HTMLTextAreaElement).value);
+  tpl.onInput(e);
+}
 </script>
 
 <template>
   <section class="image-prompt-section">
     <div class="prompt-textarea-wrap">
       <textarea
+        ref="promptTextarea"
         :value="prompt"
-        @input="emit('update:prompt', ($event.target as HTMLTextAreaElement).value)"
-        placeholder="描述你想生成的图片..."
+        @input="onPromptInput"
+        @keydown="tpl.onKeydown"
+        @blur="tpl.close"
+        placeholder="描述你想生成的图片... 或按 / 选择提示词模板"
         rows="2"
       ></textarea>
+      <!-- 提示词模板浮层（"/" 触发，向上展开） -->
+      <TemplatePopover
+        v-if="tpl.open.value"
+        :templates="tpl.filtered.value"
+        :active-index="tpl.activeIndex.value"
+        @select="tpl.insertTemplate"
+        @hover="tpl.activeIndex.value = $event"
+      />
     </div>
     <div class="param-row">
       <button

@@ -8,6 +8,10 @@
  */
 import { uxp } from "../globals";
 import { DEFAULT_UXP_PROVIDER_ID } from "./ai/providers/types";
+import type { PromptTemplate } from "@shared/messages";
+
+/** 自定义提示词模板上限（UI 侧同样限制） */
+export const PROMPT_TEMPLATES_MAX = 10;
 
 const SETTINGS_FILENAME = "app-settings.json";
 const SETTINGS_FALLBACK_FILENAME = "app-settings.sec.json";
@@ -23,6 +27,8 @@ interface PersistedSettings {
   feishuToken?: string;
   /** 剪辑师（自定义字段，全局生效） */
   editorName?: string;
+  /** 自定义提示词模板（非敏感；上限 PROMPT_TEMPLATES_MAX） */
+  promptTemplates?: PromptTemplate[];
 }
 
 const SECURE_KEY = "rocx.apiKey";
@@ -365,6 +371,28 @@ export const storage = {
   async getDryRun(): Promise<boolean> {
     const s = await readSettings();
     return s.dryRun ?? true;
+  },
+
+  /** 自定义提示词模板（非敏感，随 settings 全局持久化） */
+  async getPromptTemplates(): Promise<PromptTemplate[]> {
+    const s = await readSettings();
+    return Array.isArray(s.promptTemplates) ? s.promptTemplates : [];
+  },
+
+  async setPromptTemplates(
+    list: PromptTemplate[],
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const s = await readSettings();
+      s.promptTemplates = (Array.isArray(list) ? list : []).slice(
+        0,
+        PROMPT_TEMPLATES_MAX,
+      );
+      await writeSettings(s);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
   },
 
   async setDryRun(v: boolean): Promise<{ ok: boolean; error?: string }> {

@@ -157,6 +157,21 @@ export interface GenerationRecord {
   projectPath?: string;
 }
 
+/** 提示词模板（输入 "/" 唤起；自定义模板上限 10 条） */
+export interface PromptTemplate {
+  id: string;
+  /** 列表里显示的名称 */
+  label: string;
+  /**
+   * 模板正文，支持两种锚定符（仅模板内有效，不进入最终提示词）：
+   * - 「甲或乙」模式等效符：视频模式取甲、图片模式取乙（无「或」时原文保留）
+   * - {xxx} 光标锚点：插入后光标定位到该处，xxx 作为预填文本全选，打字即覆盖
+   */
+  template: string;
+  /** 适用生成模式 */
+  scope: "video" | "image" | "both";
+}
+
 export interface PromptOptimization {
   /** 本次优化前的 prompt 文本 */
   originalPrompt: string;
@@ -408,6 +423,10 @@ export interface UxptoWebviewAPI {
   /** 获取 / 设置 API Key（uxp.storage） */
   getApiKey(args?: { providerId?: string }): Promise<string | null>;
   setApiKey(key: string, providerId?: string): Promise<{ ok: boolean; error?: string }>;
+
+  /** 提示词模板：自定义模板读写（全局持久化，上限 10 条，宿主侧负责截断） */
+  getPromptTemplates(): Promise<PromptTemplate[]>;
+  setPromptTemplates(list: PromptTemplate[]): Promise<{ ok: boolean; error?: string }>;
 
   /** 飞书多维表格联动设置（与 API Key 同位置持久化） */
   getFeishuConfig(): Promise<{

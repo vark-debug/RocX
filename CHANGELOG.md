@@ -1,8 +1,27 @@
 # RocX Changelog
 
 > **追溯说明（2026-09-28）**：v0.3.0 走的是**本地 `no-ff` merge**（commit `6a26fb5`），未走 GitHub PR。本次起，建议下次发布改走 PR merge → tag → release 的流程，确保每个发布在 GitHub 上有对应的 PR 编号追溯。
+>
+> **追溯补录（2026-10-25）**：v0.4.0 发布时未同步写入本文件，以下章节由 [GitHub Release](https://github.com/vark-debug/RocX/releases/tag/v0.4.0) 正文回填。
 
-## v0.4.0 (2026-10-08)
+## v0.4.1 (2026-10-15)
+
+新增**提示词模板**功能，提升重复性提示词的录入效率。
+
+### 新增
+
+- **提示词模板（"/" 唤起）**：提示词输入框内键入 `/` 唤起模板浮层，键盘 ↑↓ 选择、回车插入、Esc 关闭；视频与图片输入框均支持
+- **模板锚定符**（仅模板内有效，不进入最终提示词）：
+  - `{xxx}` 光标锚点：插入后光标定位到锚点处，`xxx` 作为预填文本全选，直接打字即覆盖
+  - 「甲或乙」模式等效符：视频模式取甲、图片模式取乙（无「或」时原文保留）
+- **设置页模板管理**：内置模板开合 + 自定义模板增删改（上限 10 条，随插件全局持久化，跨工程共享）
+- **生成闸门**：提示词与模板原样一致（未修改 `{xxx}` 预填）时拦截提交并提示，防止把锚点占位文本直接送去生成
+
+### 兼容性
+
+- 纯 webview + storage 层改动，无 manifest 变更，热更新即可生效
+
+## v0.4.0 (2026-10-09)
 
 首个**多平台 + 图片生成**版本。面板从「MiniMax 单平台视频生成」扩展为视频 / 图片双模式、三平台独立 Key，并新增抓帧→Photoshop 工作流与 C++ 混合插件；同时系统性修复了多工程并行下的记录丢失问题。
 
@@ -78,6 +97,12 @@
 
 - ESLint / `eslint-plugin-premierepro` 仍未接入（自 v0.1.1 顺延；会引入 eslint v9 + typescript-eslint v8 共 50+ 间接依赖，需单独 PR 处理）
 - 未在 macOS / Windows 双平台对图片生成与抓帧→PS 做全量验证（v0.4.0 功能主要在 macOS 开发机验证）
+
+### 附件说明
+
+- `com.rocx.uxp_premierepro.ccx`：CCX 安装包（macOS 本机构建）。包内 C++ Hybrid addon（`RocXBridge.uxpaddon`）**仅含 macOS arm64 版本**——Windows 安装后「抓帧→PS」会因 addon 缺失**直接降级走 launcher 启动脚本**（`launcher.ps1` / `launcher.cmd`），功能可用但拉起方式不同；Windows 版 addon 需在 Windows 上另行编译打包。
+
+**Full Changelog**: https://github.com/vark-debug/RocX/compare/v0.3.0...v0.4.0
 
 ## v0.3.0 (2026-09-28)
 
