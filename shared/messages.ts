@@ -22,12 +22,40 @@ export type VideoGenCapability =
   | "videoReference"
   | "audioReference";
 
+/**
+ * 可灵 provider id。
+ *
+ * UXP 端（billing / webhook 的成本与用途分流）与 Webview 端（provider 注册）
+ * 共用同一个常量，避免两侧各写一份字符串导致分流失效。
+ */
+export const KLING_PROVIDER_ID = "kling";
+
+/**
+ * 该 provider 的参考素材是否需要先上传到 provider 自家的文件服务。
+ *
+ * 可灵走本机 CLI：素材以**本地路径**传给 CLI，由 CLI 自己上传到可灵
+ * （CLI 的 resolveFileUrl 会先把本地文件传上去），因此可灵**没有 fileId**，
+ * 也不该去调 provider 的上传接口 —— 调了必然失败（"未配置 API Key"）。
+ */
+export function providerNeedsReferenceUpload(providerId?: string): boolean {
+  return providerId !== KLING_PROVIDER_ID;
+}
+
 /** 上报用途（写入多维表格的 purpose 列） */
 export const REPORT_PURPOSE = {
   VIDEO_GEN: "视频生成",
   UPSCALE: "分辨率升级",
   PROMPT_OPT: "提示词优化",
   IMAGE_GEN: "图片生成",
+  /**
+   * 可灵视频 / 图片生成。
+   *
+   * 与上面四项分列的原因不是「谁生成的」，而是**成本口径不同**：
+   * 可灵是实扣灵感值（提交即扣、失败不退），其余三家是本地价格表估算的人民币元。
+   * 飞书侧按 purpose 区分汇总口径。现有四个值不动。
+   */
+  KLING_VIDEO_GEN: "可灵视频生成",
+  KLING_IMAGE_GEN: "可灵图片生成",
 } as const;
 
 export type ReportPurpose =
@@ -67,6 +95,20 @@ export interface ReferenceItem {
    * 避免刷新/重载场景下静默上传历史 jpg。
    */
   pendingUpload?: boolean;
+  /**
+   * 可灵 CDN 直链（预上传产物）。
+   *
+   * 可灵走本机 CLI：素材以**本地路径**传给 CLI 时，CLI 会在提交命令内部现传 CDN
+   * （实测 6-9MB 素材 4-8s），这段时间全落在「点生成 → 显示生成中」的空窗里。
+   * 抓素材时后台先传一次拿到直链，提交时直接传 URL —— CLI 的 resolveFileUrl 对 http(s)
+   * 是**直通不重传**的，于是空窗从 ~10s 降到 ~2s。
+   *
+   * 与 fileId 分开存：fileId 语义是「provider 自家文件服务的 id」（与 uploadProvider 绑定），
+   * 可灵没有这层服务，直链不能占用该字段，否则会污染 minimax 的换 provider 补传逻辑。
+   */
+  klingFileUrl?: string;
+  /** klingFileUrl 的上传时刻（ISO）—— 用于 TTL 判定，过期则回退本地路径重传 */
+  klingUploadedAt?: string;
 }
 
 /**
@@ -118,6 +160,15 @@ export interface GenerationRecord {
   /** 图片生成（阶段 2A 预览）：结果图 CDN URL（下载/导入在后续阶段） */
   resultUrl?: string;
   status: RecordStatus;
+  /**
+   * pending 阶段的细分（仅 status === "pending" 时有意义）。
+   *
+   * 之前 pending 一律显示「排队」，但 pending 里其实包含两段完全不同的等待：
+   * 准备素材（CLI 自检 + 素材上传）与提交任务（provider 提交接口）。
+   * 拆开显示后，用户能看出到底卡在哪一步。
+   * 终态（generating / failed）会清空该字段。
+   */
+  pendingStage?: "preparing" | "submitting";
   thumb?: string;
   error?: {
     message: string;
@@ -133,7 +184,17 @@ export interface GenerationRecord {
     total_tokens?: number;
     prompt_tokens?: number;
     completion_tokens?: number;
+    /** 可灵 CLI 的实扣灵感值（提交时由服务端返回） */
+    credits_consumed?: number;
   };
+  /**
+   * 本次实扣的灵感值（**仅可灵记录**）。
+   *
+   * 可灵在提交时即扣费，该值随 generationId 一起返回 —— 是真实扣费额，
+   * 不是本地价格表推算的估算值。上报时独立成列，绝不折算成人民币元。
+   * 缺失表示「扣费未知」（不是 0 扣费），上报时按 amount=0 + unit=CREDITS 表达。
+   */
+  creditsConsumed?: number;
   /** 任务首次提交时刻（用于计费恢复的连续轮询） */
   submittedAt?: string;
   /** 最后一次轮询时间戳 */
@@ -213,7 +274,13 @@ export interface ProjectRecords {
 }
 
 // ===== 中性命名（推荐新代码使用）=====
-export type VideoModel = "MiniMax-H3" | "MiniMax-H3-Max";
+//
+// ⚠ 这三个类型都**允许 provider 自定义取值**（尾部 `string & {}`）：
+//   - model id：可灵的模型清单由服务端动态下发，不能写死成枚举
+//   - resolution：可灵用 "720p" / "1080p" / "4k"，与 MiniMax 的 "768P" / "2K" 不是一套
+//   - ratio：同理，取值随服务端声明变化
+//   尾部的 `string & {}` 保留已知值的字面量自动补全，同时不拒绝未知值。
+export type VideoModel = "MiniMax-H3" | "MiniMax-H3-Max" | (string & {});
 
 export type VideoRatio =
   | "adaptive"
@@ -222,9 +289,10 @@ export type VideoRatio =
   | "4:3"
   | "1:1"
   | "3:4"
-  | "9:16";
+  | "9:16"
+  | (string & {});
 
-export type VideoResolution = "480P" | "768P" | "2K";
+export type VideoResolution = "480P" | "768P" | "2K" | (string & {});
 
 export interface VideoParamConstraints {
   resolutions: VideoResolution[];
@@ -235,8 +303,13 @@ export interface VideoParamConstraints {
   ratioAdaptiveAllowed: boolean;
 }
 
-/** MiniMax 当前默认 provider 的参数约束表（兼容旧名） */
-export const VIDEO_PARAM_CONSTRAINTS: Record<VideoModel, VideoParamConstraints> = {
+/**
+ * MiniMax 模型的参数约束表（provider 私有，挂在 MiniMaxProvider 的 descriptor 上）。
+ *
+ * ⚠ 这只是 MiniMax 的**默认值**；运行时 UI 的实际约束以当前 provider 的
+ * model descriptor.paramConstraints 为准（可灵的参数由服务端动态下发，不在本表里）。
+ */
+export const VIDEO_PARAM_CONSTRAINTS: Record<string, VideoParamConstraints> = {
   "MiniMax-H3": {
     resolutions: ["768P", "2K"],
     durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
@@ -284,11 +357,79 @@ export interface MiniMaxQueryResponse {
 }
 
 export interface MiniMaxUploadResponse {
-  file_id: string;
+  /** ⚠ MiniMax 上传接口的 file_id 是 int64，JSON 里是**数字**。
+   *  内部使用前需 String() 归一化（见 MiniMaxUxPProvider.uploadFile）。 */
+  file_id: string | number;
   bytes?: number;
 }
 
 export type FileKind = "video" | "audio" | "image";
+
+/**
+ * 可灵 CLI 调用结果
+ *
+ * `code` 语义:
+ * - `ok`                 成功，data 为 CLI envelope 的 body
+ * - `addon_unavailable`  C++ Hybrid addon 不可用（PR 版本过低 / uxpaddon 缺失）
+ * - `cli_not_installed`  本机找不到可灵 CLI
+ * - `not_logged_in`      CLI 未登录（需 `kling login`）
+ * - `bad_output`         stdout 不是合法 JSON（raw 携带原文）
+ * - `command_failed`     CLI 正常返回但业务失败（如参数非法）
+ * - `timeout`            执行超时被 kill
+ */
+export type KlingCliCode =
+  | "ok"
+  | "addon_unavailable"
+  | "cli_not_installed"
+  | "not_logged_in"
+  | "bad_output"
+  | "command_failed"
+  | "timeout";
+
+export interface KlingCliExecResult {
+  ok: boolean;
+  code: KlingCliCode;
+  /** 解析后的 CLI body（envelope.body） */
+  data?: unknown;
+  error?: string;
+  /** 原始 stdout；解析失败时用于排查 */
+  raw?: string;
+}
+
+/**
+ * 可灵环境自检的持久化快照。
+ *
+ * 目的：CLI 定位（找 node / npm root / 探测 cli.js）要跑好几次子进程，
+ * 首次约 1s+。持久化后二次启动直接读快照渲染 UI，再后台刷新。
+ *
+ * 非敏感数据（余额 / 会员 / 模型清单），可安全落盘。
+ */
+export interface KlingEnvSnapshot {
+  /** 环境是否可用（CLI 已装 + 已登录 + 模型清单拉到） */
+  ready: boolean;
+  /** 未就绪的原因 */
+  reason?: "cli_not_installed" | "not_logged_in" | "error";
+  /** 人话提示 */
+  message?: string;
+  /** 余额（灵感值），来自 `kling account` */
+  credits?: number;
+  /** 会员等级（如 SVIP） */
+  membershipType?: string;
+  /** 会员等级描述（如「铂金会员」） */
+  membershipDescription?: string;
+  /** 可用模型数量 */
+  modelCount?: number;
+  /** 充值链接（服务端下发，不硬编码） */
+  rechargeUrl?: string;
+  /** 上次自检时间（ISO 字符串） */
+  checkedAt?: string;
+  /**
+   * 模型清单快照（who_am_i 的 availableModels 原始结构）。
+   * 服务端可能上新/下架模型，持久化只为「启动即有模型可选」，
+   * 后台刷新会用新值覆盖。
+   */
+  catalog?: unknown;
+}
 
 /** UXP 端通过 bridge 暴露给 Webview 的完整接口 */
 export interface UxptoWebviewAPI {
@@ -580,7 +721,34 @@ export interface UxptoWebviewAPI {
   }>;
 
   /**
-   * 抓取当前序列工作区（in/out）→ 导出视频 → 上传 MiniMax → 返回 ReferenceItem
+   * 执行可灵 CLI 命令（经 C++ Hybrid addon 拉起本机 `kling` CLI）。
+   *
+   * args 为 CLI 子命令 + 参数数组（如 ["who_am_i", "--quiet"]）。
+   * 返回解析后的 envelope.body；失败时 code 标明原因。
+   *
+   * priority：foreground（默认，用户直接感知）/ background（后台预热，
+   * 可被前台请求插队 —— 素材预上传用它，避免把「点生成」堵在队列里）。
+   */
+  klingCliExec(
+    args: string[],
+    opts?: { timeoutMs?: number; priority?: "foreground" | "background" },
+  ): Promise<KlingCliExecResult>;
+
+  /**
+   * 读可灵环境自检的持久化快照（无快照时返回 null）。
+   *
+   * 二次启动先读它渲染 UI，避免每次都跑一遍 CLI 定位（~1s+）。
+   */
+  getKlingEnvSnapshot(): Promise<KlingEnvSnapshot | null>;
+
+  /** 写可灵环境自检快照（覆盖写） */
+  setKlingEnvSnapshot(snapshot: KlingEnvSnapshot): Promise<{ ok: boolean; error?: string }>;
+
+  /** 清空可灵环境快照（用户重置 / 检测环境变更时用） */
+  clearKlingEnvSnapshot(): Promise<{ ok: boolean; error?: string }>;
+
+  /**
+   * 抓当前序列工作区（in/out）→ 导出视频 → 上传 MiniMax → 返回 ReferenceItem
    */
   captureWorkAreaAndUploadAsReference(args?: {
     exportFull?: boolean;

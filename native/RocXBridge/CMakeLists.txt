@@ -26,14 +26,18 @@ set(COMMON_SOURCES
 )
 
 if(APPLE)
-    list(APPEND COMMON_SOURCES src/RocXBridgeMac.mm)
+    list(APPEND COMMON_SOURCES src/RocXBridgeMac.mm src/RocXBridgeCommand.mm)
 elseif(WIN32)
-    list(APPEND COMMON_SOURCES src/RocXBridgeWin.cpp)
+    list(APPEND COMMON_SOURCES src/RocXBridgeWin.cpp src/RocXBridgeCommandWin.cpp)
 endif()
 
 add_library(RocXBridge SHARED ${COMMON_SOURCES})
 
 target_include_directories(RocXBridge PRIVATE ${UXP_SDK_INCLUDE_DIRS})
+
+# runCommand 用 std::thread 跑子进程
+find_package(Threads REQUIRED)
+target_link_libraries(RocXBridge PRIVATE Threads::Threads)
 
 if(APPLE)
     target_link_libraries(RocXBridge PRIVATE

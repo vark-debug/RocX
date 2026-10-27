@@ -5,6 +5,13 @@ import {
   usePromptTemplates,
   PROMPT_TEMPLATES_MAX,
 } from "../composables/usePromptTemplates";
+import {
+  klingEnv,
+  loadKlingModels,
+  refreshKlingAccount,
+  restoreKlingEnvSnapshot,
+  KLING_LOW_CREDITS_THRESHOLD,
+} from "../providers/kling";
 
 declare const __ROCX_DEV__: boolean;
 
@@ -100,6 +107,61 @@ async function save() {
     message.value = `保存失败: ${r.error}`;
   }
 }
+
+// ---------- 可灵 CLI 环境自检 ----------
+const klingChecking = ref(false);
+
+/** 余额是否为 0（提交必然被服务端拒绝） */
+const klingNoCredits = computed(
+  () => typeof klingEnv.value.credits === "number" && klingEnv.value.credits <= 0,
+);
+
+/** 余额是否低于告警阈值（够不够做几次最便宜的任务） */
+const klingLowCredits = computed(
+  () =>
+    typeof klingEnv.value.credits === "number" &&
+    klingEnv.value.credits < KLING_LOW_CREDITS_THRESHOLD,
+);
+
+/**
+ * 上次检测时间的可读文本。
+ *
+ * 快照是持久化的，所以这个时间可能来自上一次启动 —— 用户需要知道
+ * 显示的余额是什么时候测的。
+ */
+const klingCheckedAtText = computed(() => {
+  const raw = klingEnv.value.checkedAt;
+  if (!raw) return "";
+  const t = new Date(raw);
+  if (Number.isNaN(t.getTime())) return raw;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${t.getFullYear()}-${pad(t.getMonth() + 1)}-${pad(t.getDate())} ${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
+});
+
+/**
+ * 重新检测可灵环境：模型清单（who_am_i）+ 账户信息（account）。
+ *
+ * 清单是**服务端动态下发**的，模型上新 / 下架只有这里能看出来；
+ * 余额每次提交都会变，所以也一并刷新。
+ */
+async function checkKlingEnv(force = false) {
+  if (klingChecking.value) return;
+  klingChecking.value = true;
+  try {
+    const ok = await loadKlingModels(force ? { force: true } : undefined);
+    if (ok) await refreshKlingAccount();
+  } finally {
+    klingChecking.value = false;
+  }
+}
+
+onMounted(async () => {
+  // 已有环境状态（启动时 bootstrapKlingEnv 已跑过）→ 直接显示，不重复检测
+  if (klingEnv.value.checkedAt) return;
+  // 全新安装 / 尚未检测过：先读持久化快照（有就秒显），再跑真实检测
+  await restoreKlingEnvSnapshot();
+  void checkKlingEnv();
+});
 
 // ---------- 提示词模板管理（"/" 触发；自定义上限 10 条） ----------
 const {
@@ -200,6 +262,70 @@ function attachDebugHandlers(MiniMaxProvider: any) {
       </button>
     </div>
     <div v-if="message" class="message">{{ message }}</div>
+
+    <!-- 可灵 CLI 环境自检：装没装 / 登没登 / 还有多少灵感值 / 服务端给了哪些模型 -->
+    <div class="feishu-block">
+      <div class="feishu-title">可灵 CLI 环境</div>
+      <div class="kling-status">
+        <div class="kling-row">
+          <span class="kling-k">状态</span>
+          <span class="kling-v" :class="klingEnv.ready ? 'ok' : 'bad'">
+            {{ klingEnv.ready ? '已就绪' : '未就绪' }}
+          </span>
+        </div>
+        <div v-if="klingEnv.membershipType" class="kling-row">
+          <span class="kling-k">会员</span>
+          <span class="kling-v">
+            {{ klingEnv.membershipDescription || klingEnv.membershipType }}
+          </span>
+        </div>
+        <div v-if="klingEnv.credits !== undefined" class="kling-row">
+          <span class="kling-k">灵感值余额</span>
+          <span class="kling-v" :class="klingNoCredits ? 'bad' : klingLowCredits ? 'warn' : ''">
+            {{ klingEnv.credits }}
+          </span>
+        </div>
+        <div v-if="klingEnv.modelCount !== undefined" class="kling-row">
+          <span class="kling-k">可用模型</span>
+          <span class="kling-v">{{ klingEnv.modelCount }} 个</span>
+        </div>
+        <div v-if="klingEnv.checkedAt" class="kling-row">
+          <span class="kling-k">上次检测</span>
+          <span class="kling-v">{{ klingCheckedAtText }}</span>
+        </div>
+      </div>
+      <!-- 未就绪原因：可灵未装 CLI / 未登录 / 清单拉取失败 -->
+      <div v-if="!klingEnv.ready && klingEnv.message" class="kling-warn">
+        {{ klingEnv.message }}
+      </div>
+      <!-- 余额不足：充值链接由服务端在错误文本里下发，不硬编码 -->
+      <div v-if="klingLowCredits" class="kling-warn">
+        {{
+          klingNoCredits
+            ? "灵感值已用尽，无法提交生成任务。"
+            : `灵感值偏低（低于 ${KLING_LOW_CREDITS_THRESHOLD}），可能不足以完成一次生成。`
+        }}
+        <a
+          v-if="klingEnv.rechargeUrl"
+          :href="klingEnv.rechargeUrl"
+          target="_blank"
+          rel="noreferrer"
+          >去充值</a
+        >
+        <span v-else class="kling-warn-hint">
+          （充值入口由可灵服务端下发，提交一次后即可显示）
+        </span>
+      </div>
+      <div class="settings-row">
+        <button
+          @click="checkKlingEnv(true)"
+          :disabled="klingChecking"
+          class="test-btn"
+        >
+          {{ klingChecking ? '检测中...' : '重新检测' }}
+        </button>
+      </div>
+    </div>
 
     <!-- 飞书多维表格联动：生成成功后自动上报 -->
     <div class="feishu-block">
@@ -405,6 +531,53 @@ function attachDebugHandlers(MiniMaxProvider: any) {
     font-size: 11px;
     font-weight: 500;
     opacity: 0.85;
+  }
+}
+
+/* 可灵 CLI 环境自检 */
+.kling-status {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.kling-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.kling-k {
+  flex: 0 0 auto;
+  min-width: 56px;
+  opacity: 0.6;
+}
+
+.kling-v {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  &.ok {
+    color: #6bcf7f;
+  }
+  &.warn {
+    color: #ffcc66;
+  }
+  &.bad {
+    color: #ff9f6b;
+  }
+}
+
+.kling-warn {
+  font-size: 10px;
+  line-height: 1.4;
+  color: #ff9f6b;
+  word-break: break-all;
+  a {
+    color: var(--uxp-host-link-text-color, #4b9cf5);
   }
 }
 

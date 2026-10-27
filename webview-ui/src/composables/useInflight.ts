@@ -24,7 +24,7 @@ import { bridge } from "../services/bridge";
 import { usePolling } from "./usePolling";
 import { DEFAULT_PROVIDER_ID, DEFAULT_IMAGE_PROVIDER_ID } from "../providers/core/registry";
 import { SharedRefsKey } from "../providers/state";
-import { REPORT_PURPOSE } from "@shared/messages";
+import { REPORT_PURPOSE, KLING_PROVIDER_ID } from "@shared/messages";
 import type { GenerationRecord, ReportPurpose } from "@shared/messages";
 import { deletedRecordIds } from "./useRecordEdit";
 
@@ -170,8 +170,10 @@ export function useInflight(opts: {
   async function resumePolling(rec: GenerationRecord) {
     if (!rec.taskId) return;
     const isImage = rec.kind === "image";
+    // 可灵走 CLI 的 OAuth 登录态，没有 API Key —— 不能拿 key 缺失当阻断条件
+    const isKling = rec.params?.provider === KLING_PROVIDER_ID;
     // video 沿用旧守卫:当前 provider 无 key 直接不启动
-    if (!isImage && !shared.apiKey.value) return;
+    if (!isImage && !isKling && !shared.apiKey.value) return;
     // 防重复启动的登记必须先于任何 await(同步执行),避免并发重入双启
     if (isPolling(rec.id)) return;
     // 登记进在飞任务表(已存在则更新为最新 record 副本)
@@ -182,10 +184,13 @@ export function useInflight(opts: {
     });
 
     // image:按记录锁定的 provider 取 per-provider key(存储层回落 legacy 默认 key)
-    const apiKey = isImage
-      ? await bridge.getApiKey(rec.params.provider || DEFAULT_IMAGE_PROVIDER_ID)
-      : shared.apiKey.value;
-    if (!apiKey) {
+    // 可灵没有 key(走 CLI 登录态)→ 统一成空串,provider 侧不读它
+    const apiKey = (
+      isImage
+        ? await bridge.getApiKey(rec.params.provider || DEFAULT_IMAGE_PROVIDER_ID)
+        : shared.apiKey.value
+    ) ?? "";
+    if (!apiKey && !isKling) {
         if (isImage) {
           // 先 commit(同步进 records)再从在飞表摘除
           commitInflight(rec.id, {
@@ -250,7 +255,10 @@ export function useInflight(opts: {
                 usage: resp.usage,
                 ...(dl.ok && dl.localPath ? { workFile: dl.localPath } : {}),
               });
-              if (done) opts.onTerminalSuccess?.(done, REPORT_PURPOSE.IMAGE_GEN);
+              // ⚠ 可灵例外:「提交即上报」,终态不重复上报(见下方视频分支说明)
+              if (done && rec.params?.provider !== KLING_PROVIDER_ID) {
+                opts.onTerminalSuccess?.(done, REPORT_PURPOSE.IMAGE_GEN);
+              }
             } else if (resp.status === "succeeded") {
               commitInflight(rec.id, {
                 status: "failed",
@@ -284,7 +292,12 @@ export function useInflight(opts: {
               // 上报飞书多维表格:fire-and-forget,不阻塞后续轮询恢复
               // 不传 purpose(由 UXP 端 webhookCore.reportGenerated 用 resolvePurpose
               // 推断:record.upgradedFromResolution 存在 → 分辨率升级,否则 → 视频生成)
-              if (done) opts.onTerminalSuccess?.(done);
+              //
+              // ⚠ 可灵例外:它是「提交即上报」(积分提交时已扣且失败不退),
+              //   终态再报一次会把同一笔费用记两遍 —— 这里对可灵不触发上报。
+              if (done && rec.params?.provider !== KLING_PROVIDER_ID) {
+                opts.onTerminalSuccess?.(done);
+              }
             } else {
               commitInflight(rec.id, {
                 status: "failed",
@@ -356,6 +369,22 @@ export function useInflight(opts: {
   /** 派生:还有任意任务在轮询(= 在飞登记表非空) */
   const pollingActive = computed(() => inflight.size > 0);
 
+  /**
+   * 派生:真正在跑的生成任务数(剔除临时登记)。
+   *
+   * 临时登记是提示词优化的占位 —— 它不产生视频、不占 CLI 进程，
+   * 不该计入「同时提交任务数」的上限。
+   */
+  const generatingTaskCount = computed(() => {
+    let n = 0;
+    for (const [id, entry] of inflight) {
+      if (transientIds.has(id)) continue;
+      if (!entry?.record) continue;
+      n++;
+    }
+    return n;
+  });
+
   return {
     /** 在飞登记表 Map(底层 shallowReactive,谨慎整体替换) */
     inflight,
@@ -364,6 +393,8 @@ export function useInflight(opts: {
     /** 派生 */
     generating,
     pollingActive,
+    /** 派生:真实生成任务数(剔除提示词优化占位) */
+    generatingTaskCount,
     /** 工具 */
     belongsTo,
     isPolling,

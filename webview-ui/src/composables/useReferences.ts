@@ -18,8 +18,11 @@ import {
   type FileKind,
   type GenerationRecord,
   type VideoParamConstraints,
+  KLING_PROVIDER_ID,
+  providerNeedsReferenceUpload,
 } from "@shared/messages";
 import type { ModelDescriptor } from "../providers/core/types";
+import { startKlingPreUpload } from "../providers/kling/klingPreUpload";
 import { lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 
 export function useReferences(opts: {
@@ -68,6 +71,12 @@ export function useReferences(opts: {
         return;
       }
       opts.references.value.push(r.reference);
+      // 可灵：无 provider 文件服务，拿到本地路径后后台预上传拿 CDN 直链，
+      // 提交时 CLI 直通不重传（省掉 CLI 内部 4-8s 上传）。
+      if (!providerNeedsReferenceUpload(uploadPid)) {
+        const refToUpdate = opts.references.value[opts.references.value.length - 1];
+        startKlingPreUpload(refToUpdate);
+      }
     } else if (r.error && !r.error.includes("取消")) {
       opts.showToast(`上传失败: ${r.error}`);
     }
@@ -115,6 +124,12 @@ export function useReferences(opts: {
     // 拿数组里的 reactive proxy 引用（push 进去的 plain object !== proxy），
     // 保证 findIndex (===) 找得到且属性赋值触发响应式更新（与 uploadInBackground 同理）
     const refToUpdate = opts.references.value[opts.references.value.length - 1];
+    // 可灵没有 provider 文件服务（也没有 API Key），改走后台预上传拿 CDN 直链；
+    // 直链失败也不阻断 —— 提交时 CLI 自行上传本地路径。
+    if (!providerNeedsReferenceUpload(uploadPid)) {
+      startKlingPreUpload(refToUpdate);
+      return;
+    }
     bridge
       .uploadReferenceFile({
         filePath: refToUpdate.localPath,
@@ -230,9 +245,15 @@ export function useReferences(opts: {
    */
   function uploadInBackground(): void {
     const refToUpdate = opts.references.value[opts.references.value.length - 1];
-    refToUpdate.uploading = true;
     // 上传目标取一次快照：异步上传期间切模式不应导致标记与实际目标不一致
     const uploadPid = opts.resolveUploadProviderId();
+    // 可灵走 CLI：没有 provider 文件服务，改为后台预上传到可灵 CDN 拿直链。
+    // 直链存在 ref.klingFileUrl，提交时 CLI 直通不重传 —— 省掉 CLI 内部的 4-8s 上传。
+    if (!providerNeedsReferenceUpload(uploadPid)) {
+      startKlingPreUpload(refToUpdate);
+      return;
+    }
+    refToUpdate.uploading = true;
     bridge
       .uploadReferenceFile({
         filePath: refToUpdate.localPath,
@@ -371,6 +392,13 @@ export function useReferences(opts: {
     try {
       // 上传目标快照（与 uploadInBackground 同语义）
       const uploadPid = opts.resolveUploadProviderId();
+      // 可灵走 CLI：没有（也不需要）provider fileId，改走后台预上传拿 CDN 直链。
+      // 预上传失败也不阻断 —— 提交时 CLI 自行上传本地路径。
+      if (!providerNeedsReferenceUpload(uploadPid)) {
+        ref.pendingUpload = false;
+        startKlingPreUpload(ref);
+        return;
+      }
       const up = await bridge.uploadReferenceFile({
         filePath: ref.localPath,
         fileName: ref.fileName,

@@ -4,12 +4,14 @@
  * 责任:
  * - toRecordError: 把异常归一化为 GenerationRecord.error 形状
  * - reportToFeishu: 把已生成 record 推送到飞书;fire-and-forget,失败仅 toast
+ * - reportKlingSubmitted: 可灵「提交即上报」路径(积分已扣,不等终态)
  *
  * 不做:不持有 inflight,不关心 records 数组;调用方传入 record + purpose。
  * 这样 video upload / 多工程并行 / 升级任务都可以复用同一上报入口。
  */
 import { bridge } from "../services/bridge";
 import { VideoGenError } from "../providers/core/errors";
+import { REPORT_PURPOSE } from "@shared/messages";
 import type { GenerationRecord, ReportPurpose } from "@shared/messages";
 
 type RefAny<T> = { value: T };
@@ -52,8 +54,22 @@ export function useFeishuReport(opts: {
       });
   }
 
+  /**
+   * 可灵「提交即上报」:提交成功的瞬间就入账,不等终态。
+   *
+   * 可灵在**提交时即扣**灵感值,且服务端无退款机制(任务失败积分不退)。
+   * 若沿用「终态成功才上报」,失败任务就会「扣了钱但查无记录」。
+   * 反过来终态再报一次又会重复计账 —— 所以终态路径对可灵是**不触发**上报的。
+   *
+   * rec 必须已带上 creditsConsumed(实扣值),否则飞书侧该行会记成 0 灵感值。
+   */
+  function reportKlingSubmitted(rec: GenerationRecord) {
+    reportToFeishu(rec, REPORT_PURPOSE.KLING_VIDEO_GEN);
+  }
+
   return {
     toRecordError,
     reportToFeishu,
+    reportKlingSubmitted,
   };
 }

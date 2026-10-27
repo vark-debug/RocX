@@ -18,14 +18,29 @@ const props = defineProps<{
   resolution: VideoResolution;
   /** 当前 provider 提供的模型列表（来自 registry；按 provider + capability 渲染按钮） */
   models: ModelDescriptor[];
+  /** 可切换的视频 provider（模型弹层顶部一排平台） */
+  providers?: { id: string; label: string }[];
+  /** 当前激活的 provider id */
+  providerId?: string;
+  /** 当前 provider 的环境异常提示（如可灵未登录 / 清单拉取失败） */
+  providerNotice?: string;
   constraints: VideoParamConstraints;
   hasReferences: boolean;
   canSubmit: boolean;
   polling: boolean;
   hasApiKey: boolean;
+  /** 当前 provider 是否需要 API Key（可灵走 CLI 登录态，不需要） */
+  needsApiKey?: boolean;
   hasProject: boolean;
   /** 提示词优化正在请求中（用于按钮 loading 态） */
   optimizing?: boolean;
+  /**
+   * 提交被阻断的原因（按钮禁用时展示给用户）。
+   * 空串表示没有额外阻断原因。
+   */
+  submitBlockedReason?: string;
+  /** 提交请求正在进行中（按钮 loading 态，点击后立刻给反馈） */
+  submitting?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -34,6 +49,8 @@ const emit = defineEmits<{
   "update:ratio": [string];
   "update:duration": [number];
   "update:resolution": [string];
+  /** 切换视频 provider */
+  "update:providerId": [string];
   submit: [];
   /** 用户点击了右上角 ✨ 按钮，请求调用 provider 的 promptOptimization 能力 */
   optimize: [];
@@ -74,14 +91,21 @@ function toggleParamsPopover() {
 }
 
 const submitLabel = computed(() => {
-  if (!props.hasApiKey) return "请配置 API Key";
+  // 可灵不需要 key（needsApiKey=false），别拿「请配置 API Key」误导用户
+  if (props.needsApiKey !== false && !props.hasApiKey) {
+    return "请配置 API Key";
+  }
   if (!props.hasProject) return "请打开 PR 项目";
   if (props.polling) return "生成中...";
+  // 外部传入的阻断原因（如在飞任务数达上限）优先展示 —— 比「生成」有信息量
+  if (props.submitBlockedReason) return props.submitBlockedReason;
+  // 提交请求在途（CLI 提交要 2-3s）—— 立刻给反馈，不用干等
+  if (props.submitting) return "提交中...";
   return "生成";
 });
 
 function onSubmitClick() {
-  if (props.canSubmit) emit("submit");
+  if (props.canSubmit && !props.submitting) emit("submit");
 }
 
 /** ✨ 优化按钮可用条件：已配 Key + 当前模型具备 promptOptimization capability + prompt 非空 + 当前未在优化中 */
@@ -181,7 +205,8 @@ function onPromptInput(e: Event) {
       </button>
       <button
         class="primary submit-btn"
-        :class="{ disabled: !canSubmit }"
+        :class="{ disabled: !canSubmit || submitting, loading: submitting }"
+        :disabled="!canSubmit || submitting"
         @click="onSubmitClick"
         type="button"
       >
@@ -190,8 +215,30 @@ function onPromptInput(e: Event) {
 
       <!-- 模型选择 popover（向上展开，按钮等宽对齐） -->
       <div v-if="modelPopoverOpen" class="param-popover model-popover" @click.stop>
+        <!-- 平台切换：模型清单按 provider 下发，先选平台再看模型 -->
+        <div v-if="providers && providers.length > 1" class="popover-group">
+          <div class="group-label">平台</div>
+          <div class="radio-row radio-row--aligned">
+            <label
+              v-for="p in providers"
+              :key="p.id"
+              class="radio-item"
+              :class="{ active: providerId === p.id }"
+            >
+              <input
+                type="radio"
+                :value="p.id"
+                :checked="providerId === p.id"
+                @change="emit('update:providerId', p.id)"
+              />
+              <span>{{ p.label }}</span>
+            </label>
+          </div>
+        </div>
         <div class="popover-group">
           <div class="group-label">模型</div>
+          <div v-if="providerNotice" class="provider-notice">{{ providerNotice }}</div>
+          <div v-else-if="!models.length" class="provider-notice">该平台暂无可用模型</div>
           <div class="radio-row radio-row--aligned">
             <label
               v-for="m in models"
@@ -396,6 +443,11 @@ function onPromptInput(e: Event) {
     opacity: 0.5;
     cursor: not-allowed;
   }
+  /* 提交在途：保持可读，不做禁用灰化（disabled 类只在真被阻断时出现） */
+  &.loading {
+    opacity: 0.85;
+    cursor: progress;
+  }
 }
 
 /* 参数浮层：紧贴按钮上方展开 */
@@ -442,6 +494,15 @@ function onPromptInput(e: Event) {
   &:last-child {
     margin-bottom: 0;
   }
+}
+
+/* provider 环境异常提示（可灵未登录 / 清单拉取失败等） */
+.provider-notice {
+  font-size: 10px;
+  line-height: 1.4;
+  color: #ff9f6b;
+  margin-bottom: 4px;
+  max-width: 240px;
 }
 
 .group-label {
