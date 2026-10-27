@@ -43,6 +43,10 @@ native/RocXBridge/build/
 public-hybrid/
 # Adobe UXP Hybrid Plugin SDK 头文件已随仓库提供(third_party/uxp-hybrid-sdk/),
 # 无需从 Adobe Developer Console 下载
+# 原生侧 runCommand 单测的编译产物(源码与 run-test.sh 入库,产物不入库)
+native/RocXBridge/test/runCommandTest
+native/RocXBridge/test/runCommandTest.dSYM/
+native/RocXBridge/test/*.o
 
 .env
 scripts/mac-sign.sh
