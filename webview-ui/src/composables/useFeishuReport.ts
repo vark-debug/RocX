@@ -67,9 +67,20 @@ export function useFeishuReport(opts: {
     reportToFeishu(rec, REPORT_PURPOSE.KLING_VIDEO_GEN);
   }
 
+  /**
+   * 可灵**图片**的「提交即上报」。
+   *
+   * 与视频侧同语义（提交即扣、失败不退），但 purpose 不同 ——
+   * 飞书侧按 purpose 分列汇总成本口径，图片与视频不能混在一列。
+   */
+  function reportKlingImageSubmitted(rec: GenerationRecord) {
+    reportToFeishu(rec, REPORT_PURPOSE.KLING_IMAGE_GEN);
+  }
+
   return {
     toRecordError,
     reportToFeishu,
     reportKlingSubmitted,
+    reportKlingImageSubmitted,
   };
 }

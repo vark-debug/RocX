@@ -5,6 +5,12 @@ import * as webviewAPI from "./webview-api";
 import { initWebview } from "./webview-setup";
 import { setBridge, bridge } from "./services/bridge";
 import { ratioToSize, clampToApiMax } from "./providers/runninghub/wireFormat";
+import {
+  coerceImageRatio,
+  coerceImageSize,
+  imageRatioOptions,
+  imageSizeOptions,
+} from "./providers/core/imageOptions";
 
 import { useGenerationState } from "./composables/useGenerationState";
 import { SharedRefsKey } from "./providers/state";
@@ -32,10 +38,14 @@ import { runningHubProvider } from "./providers/runninghub";
 import { arkProvider } from "./providers/ark";
 import {
   klingProvider,
+  klingImageProvider,
   loadKlingModels,
   klingEnv,
   bootstrapKlingEnv,
   getKlingDefaultModel,
+  getKlingImageDefaultModel,
+  getKlingCatalogSync,
+  klingImageModels,
 } from "./providers/kling";
 import { KLING_PROVIDER_ID } from "@shared/messages";
 import type { ModelDescriptor } from "./providers/core/types";
@@ -56,7 +66,6 @@ import SettingsPanel from "./components/SettingsPanel.vue";
 import ModeTabs from "./components/ModeTabs.vue";
 import type { GenerationMode } from "./components/ModeTabs.vue";
 import ImagePromptInput from "./components/ImagePromptInput.vue";
-import type { ImageRatio, ImageSize } from "./components/ImagePromptInput.vue";
 
 const { api } = initWebview(webviewAPI);
 setBridge(api);
@@ -222,8 +231,10 @@ const generationMode = ref<GenerationMode>("video");
 // ---- 图片生成模式状态（阶段 2A：RunningHub 文生图） ----
 const imagePrompt = ref("");
 const imageModel = ref("seedream-v5-pro");
-const imageRatio = ref<ImageRatio>("1:1");
-const imageSize = ref<ImageSize>("智能");
+// 宽高比 / 尺寸档位按平台的值域取值（可灵是 "1k"/"2k"/"4k" + "auto"，
+// 其余平台是 "智能"/"1K"/"2K" + 固定 5 个比例）→ 用 string 而非字面量联合
+const imageRatio = ref<string>("1:1");
+const imageSize = ref<string>("智能");
 /** 活动序列分辨率（智能档展示 / 提交兜底用；切到图片生成模式时刷新；超 API 上限的已等比钳制） */
 const imageSeqSize = ref<{ width: number; height: number } | null>(null);
 async function refreshImageSeqSize() {
@@ -239,21 +250,145 @@ async function refreshImageSeqSize() {
 watch(generationMode, (mode) => {
   if (mode === "image") void refreshImageSeqSize();
 });
-/** 已注册图片 provider 列表（响应式：mount 注册后更新；模型下拉聚合所有 provider 的模型） */
-const imageProviderList = ref<import("./providers/core/ImageGenProvider").ImageGenProvider[]>([]);
-const imageModels = computed<ModelDescriptor[]>(() =>
-  imageProviderList.value.flatMap((p) => p.models),
-);
 
 /**
- * 按当前选中的图片 modelId 推导所属图片 provider id（多图片 provider：选中即路由）。
- * 未命中（异常态）回落默认图片 provider。
+ * 模型变了 → 参数值域可能跟着变（可灵不同模型的 img_resolution / aspect_ratio 值域不同），
+ * 立刻把当前档位/比例收敛到新模型的合法值域。
+ */
+watch(imageModel, () => {
+  normalizeImageParams();
+});
+/** 已注册图片 provider 列表（响应式：mount 注册后更新；模型下拉聚合所有 provider 的模型） */
+const imageProviderList = ref<import("./providers/core/ImageGenProvider").ImageGenProvider[]>([]);
+
+/**
+ * 当前激活的图片平台 id。
+ *
+ * 之前是「按选中的 modelId 反查 provider」（resolveImageProviderId），
+ * 现在有平台栏了，平台是**显式状态**，模型是平台的子集 —— 反查方式在新交互下
+ * 会有歧义（两个平台可能存在同名模型），改成显式持有。
+ */
+const currentImageProviderId = ref<string>(DEFAULT_IMAGE_PROVIDER_ID);
+
+/** 当前图片平台的模型列表 */
+const imageModels = computed<ModelDescriptor[]>(() => {
+  if (currentImageProviderId.value === KLING_PROVIDER_ID) {
+    // 可灵图片模型来自服务端动态下发（who_am_i），单独取（provider 实例的 models
+    // 是 getter，但这里直接读 ref 更直观，也避免依赖 provider 实例的注册时机）
+    return klingImageModels.value;
+  }
+  return (
+    imageProviderList.value.find(
+      (p) => p.providerId === currentImageProviderId.value,
+    )?.models ?? []
+  );
+});
+
+/**
+ * 按当前选中的图片 modelId 推导所属图片 provider id。
+ *
+ * 用于「素材上传目标」的分流（抓素材时要知道给谁传）——
+ * 优先用显式的平台状态，平台没定才按模型反查。
  */
 function resolveImageProviderId(): string {
-  const hit = listImageProviders().find((p) =>
-    p.models.some((m) => m.modelId === imageModel.value),
+  return currentImageProviderId.value;
+}
+
+/** 图片平台的切换选项（id + 显示名） */
+const imageProviderOptions = computed(() => {
+  const opts = imageProviderList.value.map((p) => ({
+    id: p.providerId,
+    label: p.displayName,
+  }));
+  return opts;
+});
+
+/** 当前图片平台的环境异常提示（可灵未登录 / 清单拉取失败等） */
+const imageProviderNotice = computed(() => {
+  if (currentImageProviderId.value !== KLING_PROVIDER_ID) return "";
+  if (klingEnv.value.ready) return "";
+  return klingEnv.value.message || "可灵环境未就绪，请到设置里查看自检结果";
+});
+
+/**
+ * 当前图片模型的参数约束（按平台下发的服务端声明）。
+ *
+ * 可灵走服务端声明（img_resolution / aspect_ratio 值域 + 默认值），
+ * 其余平台没有 constraints（沿用本地默认的宽高比与尺寸档位）。
+ */
+const imageConstraints = computed(() => {
+  if (currentImageProviderId.value !== KLING_PROVIDER_ID) return undefined;
+  const m = imageModels.value.find((x) => x.modelId === imageModel.value);
+  if (!m) return undefined;
+  return {
+    resolutions: m.paramConstraints.resolutions,
+    ratios: m.paramConstraints.ratios,
+    defaultResolution: m.paramConstraints.defaultResolution,
+    defaultRatio: m.paramConstraints.defaultRatio,
+  };
+});
+
+/** 当前图片平台是否支持"智能"档（跟随序列分辨率）—— 可灵只有档位 + 比例，不支持 */
+const imageSupportsSmartSize = computed(
+  () => currentImageProviderId.value !== KLING_PROVIDER_ID,
+);
+
+/** 当前图片平台是否需要 API Key（可灵走 CLI 登录态，不需要） */
+const imageNeedsApiKey = computed(
+  () => currentImageProviderId.value !== KLING_PROVIDER_ID,
+);
+
+/** 当前图片平台是否已配置 API Key（用于提交按钮文案） */
+const imageHasApiKey = ref(false);
+
+/**
+ * 把当前尺寸档位 / 宽高比收敛到当前平台的合法值域。
+ *
+ * 值域随**平台**和**模型**而变（可灵 "1k"/"2k"/"4k" + "auto"，
+ * 其余平台 "智能"/"1K"/"2K" + 固定 5 比例），所以任何时候改了平台或模型
+ * 都要重新收敛一次，否则提交时会下发非法参数。
+ */
+function normalizeImageParams(): void {
+  imageSize.value = coerceImageSize(
+    imageSize.value,
+    imageSizeOptions(imageConstraints.value, imageSupportsSmartSize.value),
+    imageConstraints.value?.defaultResolution,
   );
-  return hit?.providerId ?? DEFAULT_IMAGE_PROVIDER_ID;
+  imageRatio.value = coerceImageRatio(
+    imageRatio.value,
+    imageRatioOptions(imageConstraints.value),
+    imageConstraints.value?.defaultRatio,
+  );
+}
+
+/**
+ * 切换图片平台。
+ *
+ * 与视频侧 switchVideoProvider 同构，但有两处图片特有的处理：
+ * 1. 可灵的模型清单要现拉（who_am_i），切过去先加载再取默认模型
+ * 2. 尺寸档位 / 宽高比的值域**随平台而变**（可灵 "1k"/"2k"/"4k" + "auto"，
+ *    其余平台 "智能"/"1K"/"2K" + 固定 5 比例）→ 切完必须把当前值收敛到新值域，
+ *    否则提交时会下发非法参数
+ */
+async function switchImageProvider(id: string): Promise<void> {
+  if (id === currentImageProviderId.value) return;
+  currentImageProviderId.value = id;
+  if (id === KLING_PROVIDER_ID) {
+    await loadKlingModels();
+  }
+  const models = imageModels.value;
+  // 默认模型：仍能命中就保留（用户可能只是切回来），否则重置为新平台的默认模型
+  if (models.length && !models.some((m) => m.modelId === imageModel.value)) {
+    imageModel.value =
+      id === KLING_PROVIDER_ID
+        ? getKlingImageDefaultModel() || models[0]?.modelId || ""
+        : models[0]?.modelId ?? "";
+  }
+  // 值域收敛（constraints 随模型重算后才有意义 → 必须在 model 定下来之后）
+  normalizeImageParams();
+  // key 状态（可灵没有 key 槽位，读回来是空串）
+  imageHasApiKey.value =
+    id === KLING_PROVIDER_ID ? true : !!(await bridge.getApiKey(id));
 }
 
 // ---------- provide: 共享 refs 给 composables(V5.2) ----------
@@ -357,9 +492,11 @@ const submitApi = useSubmit({
 });
 
 // ---------- 图片生成提交（阶段 2A：RunningHub 文生图） ----------
-// 复用 useSubmit 的归属解析与 inflight/polling 单例;key 按 runninghub per-provider 读取
+// 复用 useSubmit 的归属解析与 inflight/polling 单例;key 按图片平台现读
+// （可灵没有 key 槽位 —— 走 CLI 登录态）
 const imageSubmitApi = useImageSubmit({
   imageModel,
+  imageProviderId: currentImageProviderId,
   imagePrompt,
   imageRatio,
   imageSize,
@@ -368,6 +505,8 @@ const imageSubmitApi = useImageSubmit({
   inflightApi: {
     resumePolling: inflightApi.resumePolling,
   },
+  // 可灵图片「提交即上报」：提交成功拿到实扣灵感值即入账，不等终态
+  reportKlingSubmitted: feishuApi.reportKlingImageSubmitted,
 });
 
 // ---------- 导入到工程 ----------
@@ -379,11 +518,17 @@ const importApi = useImport({
 // ---------- 重试 / 删除记录 ----------
 // useRecordEdit 的视频分支走 inject 状态;图片分支经 retryImage 回填顶层图片态
 const recordEditApi = useRecordEdit({
-  retryImage: (rec) => {
+  retryImage: async (rec) => {
     generationMode.value = "image";
     imagePrompt.value = rec.prompt;
+    // 平台回填：记录里的 provider 才是当初提交用的平台
+    // （可灵记录必须在可灵平台重试 —— 模型清单与参数值域都不同）
+    const recProvider = rec.params.provider || DEFAULT_IMAGE_PROVIDER_ID;
+    if (recProvider !== currentImageProviderId.value) {
+      await switchImageProvider(recProvider);
+    }
     if (rec.params.model) imageModel.value = rec.params.model;
-    if (rec.params.ratio) imageRatio.value = rec.params.ratio as ImageRatio;
+    if (rec.params.ratio) imageRatio.value = rec.params.ratio as string;
     // params.resolution 现在存的是计价档位（按像素总数算出），不一定等于 UI 档位：
     // width/height 与某个预设映射吻合 → 回填该档位；否则视为智能档（序列分辨率）
     const w = rec.imageParams?.width;
@@ -396,6 +541,10 @@ const recordEditApi = useRecordEdit({
         },
       );
       imageSize.value = matched ?? "智能";
+    } else if (recProvider === KLING_PROVIDER_ID) {
+      // 可灵记录没有 imageParams（实际像素由服务端决定），
+      // 但 params.resolution 存的就是服务端档位（"1k"/"2k"/"4k"）→ 直接回填
+      imageSize.value = rec.params.resolution;
     }
     // 图生图参考回填（本地 localPath 仍在，重新提交时按 Base64 直传重读）
     references.value = rec.references;
@@ -499,9 +648,12 @@ onMounted(async () => {
     registerProvider(klingProvider);
   }
   videoProviderList.value = listProviders();
-  // 注册图片 provider（RunningHub + 火山方舟），刷新聚合模型列表
+  // 注册图片 provider（RunningHub + 火山方舟 + 可灵），刷新聚合模型列表
   registerImageProvider(runningHubProvider);
   registerImageProvider(arkProvider);
+  // 可灵图片 provider（文生图 / 图生图）：走 CLI 登录态，无需 API Key。
+  // 模型清单与视频侧共用同一份 who_am_i 响应（切到可灵时才加载）。
+  registerImageProvider(klingImageProvider);
   imageProviderList.value = listImageProviders();
 
   // 默认 provider：MiniMax 没配 key 时改用可灵（走 CLI 登录态，不需要 API Key）。
@@ -534,8 +686,11 @@ onMounted(async () => {
       model.value = pickDefaultModelFor(currentProviderId.value, models);
     }
   }
-  // 图片模型智能默认：仅当只配置了一个图片平台（runninghub/ark）的 key 时，
-  // 默认选中该平台的首个模型；两个都有 key 或都没有则保持默认（runninghub）
+  // 图片平台默认（平台是显式状态，不再按 modelId 反查）：
+  // - 有 key 的平台优先（RunningHub / 火山方舟 谁有 key 用谁）
+  // - 两个都没 key → 优先可灵（走 CLI 登录态，不需要 key）。
+  //   只在清单已经加载过时才切（视频侧没配 MiniMax key 时会顺带加载），
+  //   否则不为了图片多跑一次 CLI —— 用户可以在平台栏里手动切。
   try {
     const [rhKey, arkKey] = await Promise.all([
       bridge.getApiKey("runninghub"),
@@ -544,22 +699,18 @@ onMounted(async () => {
     const soleProvider =
       rhKey && !arkKey ? "runninghub" : !rhKey && arkKey ? "ark" : null;
     if (soleProvider) {
-      const curProvider = listImageProviders().find((p) =>
-        p.models.some((m) => m.modelId === imageModel.value),
-      );
-      const curHasKey =
-        curProvider &&
-        (await bridge.getApiKey(curProvider.providerId)) !== "";
-      // 当前选中模型所属平台没有 key 才切换（避免覆盖用户记忆的合法选择）
-      if (!curHasKey) {
-        const target = listImageProviders().find(
-          (p) => p.providerId === soleProvider,
-        );
-        if (target?.models.length) imageModel.value = target.models[0].modelId;
-      }
+      await switchImageProvider(soleProvider);
+    } else if (!rhKey && !arkKey && getKlingCatalogSync()) {
+      await switchImageProvider(KLING_PROVIDER_ID);
+    }
+    // key 状态（切换过平台的由 switchImageProvider 负责，这里兜底当前平台）
+    if (currentImageProviderId.value === KLING_PROVIDER_ID) {
+      imageHasApiKey.value = true;
+    } else {
+      imageHasApiKey.value = !!(await bridge.getApiKey(currentImageProviderId.value));
     }
   } catch (e) {
-    console.warn("[main-webview] 图片模型智能默认失败", e);
+    console.warn("[main-webview] 图片平台默认失败", e);
   }
   // 获取项目信息
   const pi = await bridge.queryProjectState();
@@ -587,6 +738,10 @@ function onSettingsSave(key: string, providerId: string) {
   // MiniMax 的 key 状态变化会影响平台栏排序（没 key 时可灵排前面）
   if (providerId === DEFAULT_PROVIDER_ID) {
     minimaxKeyPresent.value = !!key.trim();
+  }
+  // 当前图片平台的 key 状态变化 → 提交按钮文案（"请配置 API Key"）
+  if (providerId === currentImageProviderId.value) {
+    imageHasApiKey.value = !!key.trim();
   }
   settingsOpen.value = false;
 }
@@ -743,6 +898,14 @@ async function refreshProject() {
           v-model:size="imageSize"
           :models="imageModels"
           :seq-size="imageSeqSize"
+          :providers="imageProviderOptions"
+          :provider-id="currentImageProviderId"
+          :provider-notice="imageProviderNotice"
+          :constraints="imageConstraints"
+          :needs-api-key="imageNeedsApiKey"
+          :has-api-key="imageHasApiKey"
+          :supports-smart-size="imageSupportsSmartSize"
+          @update:providerId="switchImageProvider"
           @generate="onImageGenerate"
         />
       </template>

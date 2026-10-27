@@ -38,6 +38,19 @@ export const KLING_TOOL_IMAGE_TO_VIDEO = "image_to_video";
  */
 export const KLING_TOOL_OMNI_REF_VIDEO = "omni_ref_video";
 
+/**
+ * 可灵图片工具名（`who_am_i` → availableModels 的键）。
+ *
+ * 实测（2026-10）服务端下发的图片工具：
+ * - text_to_image：defaultModel = kling-image-v3_0_omni，无 inputs 槽位
+ * - image_to_image：**无 defaultModel**（服务端没给），inputs 为 image_1..image_10
+ *
+ * ⚠ image_to_image 的 defaultModel 是 undefined —— 取默认模型时**不能**依赖它，
+ *   得走 text_to_image 的 defaultModel（同一个模型在两个工具下都存在）。
+ */
+export const KLING_TOOL_TEXT_TO_IMAGE = "text_to_image";
+export const KLING_TOOL_IMAGE_TO_IMAGE = "image_to_image";
+
 // ---------- 模型清单结构 ----------
 
 /** 单个生成参数的声明 */
@@ -304,6 +317,229 @@ export function buildKlingModelDescriptors(
   });
 }
 
+// ---------- 图片模型 ----------
+
+/**
+ * 可灵图片模型的参数值域。
+ *
+ * 与视频模型的关键差异（实测 2026-10 的 who_am_i 声明）：
+ * - **分辨率档位参数叫 `img_resolution`**（不是视频的 `resolution`），值域 "1k"/"2k"/"4k"
+ *   —— 全部小写，视频侧是 "720p"/"1080p" 那种写法，别混。
+ * - **比例参数仍叫 `aspect_ratio`**，但值域多了 "auto"（让模型自己从提示词/参考图推断）
+ * - 有 `imageCount` 参数（1~9），视频侧没有
+ * - 无 `duration`（图片没有时长）
+ *
+ * 比例值域里带 "auto" 的模型只有部分：v3_0_omni（两个工具都有）、
+ * o1 / v3_0（仅 image_to_image 有）。text_to_image 下 o1/v3_0/v2_1 **没有** "auto"。
+ */
+export interface KlingImageParamSpec {
+  model: string;
+  alias?: string;
+  description?: string;
+  /** img_resolution 值域（"1k" / "2k" / "4k"）；模型没声明该参数则为空 */
+  resolutions: string[];
+  /** aspect_ratio 值域（含 "auto"） */
+  ratios: string[];
+  /** imageCount 值域（"1" ~ "9"） */
+  counts: string[];
+  /** 该模型是否支持参考图（图生图） */
+  supportsReference: boolean;
+  /** 参考图槽位声明（image_1..image_10 或 v2_1 的 subject_image_N/scene_image/style_image） */
+  inputs: KlingInputSpec[];
+  /** 服务端声明的默认 img_resolution（实测多数模型是 "2k"） */
+  defaultResolution?: string;
+  /** 服务端声明的默认 aspect_ratio（实测 v3_0_omni 是 "auto"） */
+  defaultRatio?: string;
+}
+
+/**
+ * 把图片工具下的模型声明拍平成统一的参数值域。
+ *
+ * 同一模型在 text_to_image / image_to_image 两个工具下的声明**合并**：
+ * - resolutions / ratios / counts 取并集
+ * - supportsReference：只要在 image_to_image 下声明了图片槽位即为 true
+ *
+ * ⚠ ratios 取并集会让 text_to_image 场景选到 "auto"（只有 image_to_image 声明了它），
+ *   但服务端对 text_to_image 也接受 auto（v3_0_omni 在两个工具下都声明了），
+ *   且 auto 只在部分模型有效 —— 提交时由 pickDeclaredValue 按**目标工具**的实际声明
+ *   复核，不在值域内的值会被换掉，不会下发非法参数。
+ */
+export function buildKlingImageParamSpecs(
+  catalog: KlingModelCatalog,
+): KlingImageParamSpec[] {
+  const merged = new Map<
+    string,
+    {
+      alias?: string;
+      description?: string;
+      resolutions: Set<string>;
+      ratios: Set<string>;
+      counts: Set<string>;
+      supportsReference: boolean;
+      inputs: KlingInputSpec[];
+      defaultResolution?: string;
+      defaultRatio?: string;
+    }
+  >();
+
+  for (const tool of [KLING_TOOL_TEXT_TO_IMAGE, KLING_TOOL_IMAGE_TO_IMAGE]) {
+    for (const spec of catalog[tool]?.models ?? []) {
+      const cur = merged.get(spec.model) ?? {
+        resolutions: new Set<string>(),
+        ratios: new Set<string>(),
+        counts: new Set<string>(),
+        supportsReference: false,
+        inputs: [],
+      };
+      cur.alias = cur.alias ?? spec.alias;
+      cur.description = cur.description ?? spec.description;
+      for (const arg of spec.arguments ?? []) {
+        const values = (arg.allowedValues ?? []).map((v) => String(v));
+        if (arg.name === "img_resolution") {
+          for (const v of values) cur.resolutions.add(v);
+          // 首个声明的默认值即 UI 初始值（text_to_image 优先，它是主入口）
+          if (cur.defaultResolution === undefined && arg.default != null) {
+            cur.defaultResolution = String(arg.default);
+          }
+        } else if (arg.name === "aspect_ratio") {
+          for (const v of values) cur.ratios.add(v);
+          if (cur.defaultRatio === undefined && arg.default != null) {
+            cur.defaultRatio = String(arg.default);
+          }
+        } else if (arg.name === "imageCount") {
+          for (const v of values) cur.counts.add(v);
+        }
+      }
+      if (tool === KLING_TOOL_IMAGE_TO_IMAGE && (spec.inputs ?? []).length > 0) {
+        cur.supportsReference = true;
+        cur.inputs = spec.inputs ?? [];
+      }
+      merged.set(spec.model, cur);
+    }
+  }
+
+  return Array.from(merged.entries()).map(([model, m]) => ({
+    model,
+    alias: m.alias,
+    description: m.description,
+    resolutions: Array.from(m.resolutions),
+    ratios: Array.from(m.ratios),
+    counts: Array.from(m.counts),
+    supportsReference: m.supportsReference,
+    inputs: m.inputs,
+    defaultResolution: m.defaultResolution,
+    defaultRatio: m.defaultRatio,
+  }));
+}
+
+/** 图片工具的参考图槽位上限（取声明里的槽位数） */
+export function countKlingImageSlots(spec: KlingModelSpec): number {
+  return (spec.inputs ?? []).length;
+}
+
+/**
+ * 把图片参数值域拍平成 UI 下拉直接可用的 ModelDescriptor[]。
+ *
+ * paramConstraints 的复用约定（与视频侧一致）：
+ * - resolutions → img_resolution 的值域（"1k"/"2k"/"4k"）
+ * - ratios → aspect_ratio 的值域
+ * - durations → 空（图片无时长）
+ */
+export function buildKlingImageModelDescriptors(
+  catalog: KlingModelCatalog,
+): ModelDescriptor[] {
+  return buildKlingImageParamSpecs(catalog).map((spec) => ({
+    providerId: KLING_PROVIDER_ID,
+    modelId: spec.model,
+    displayName: klingDisplayName(spec.model, spec.alias),
+    description: spec.description,
+    paramConstraints: {
+      resolutions: spec.resolutions,
+      durations: [],
+      ratios: spec.ratios,
+      ratioAdaptiveAllowed: false,
+      defaultResolution: spec.defaultResolution,
+      defaultRatio: spec.defaultRatio,
+    },
+    capabilities: ["imageGeneration"],
+  }));
+}
+
+/**
+ * 取可灵图片的默认模型 id。
+ *
+ * 服务端给 text_to_image 的 defaultModel 是 `kling-image-v3_0_omni`，
+ * 但 image_to_image **没有** defaultModel —— 所以取默认模型时
+ * 必须先看 text_to_image（它覆盖了全部图片模型）。
+ *
+ * ⚠ 不能取清单首项：服务端返回顺序是
+ * `v3_0_omni, o1, v3_0, v2_1`，首项恰好是默认款，
+ * 但这是巧合 —— 依赖服务端顺序迟早失效。
+ */
+export function pickKlingImageDefaultModel(catalog: KlingModelCatalog): string {
+  const def = catalog[KLING_TOOL_TEXT_TO_IMAGE]?.defaultModel;
+  if (def) return def;
+  const first = catalog[KLING_TOOL_TEXT_TO_IMAGE]?.models?.[0]?.model;
+  if (first) return first;
+  return "";
+}
+
+/** 图片参数组装计划 */
+export interface KlingImagePlan {
+  /** 目标工具：text_to_image / image_to_image */
+  tool: string;
+  /** 目标工具下该模型的声明 */
+  spec: KlingModelSpec;
+  prompt: string;
+  /** img_resolution（"1k" / "2k" / "4k"）；模型没声明则不下发 */
+  resolution: string;
+  /** aspect_ratio（含 "auto"） */
+  ratio: string;
+  /** imageCount（张数） */
+  count: number;
+  /** 参考图来源（CDN 直链或本地绝对路径） */
+  images: string[];
+  /** 本次任务的 trace id */
+  traceId: string;
+}
+
+/**
+ * 组装图片生成的 CLI 参数数组。
+ *
+ * 参考图用 `--image`（按序填入声明的槽位），**不用** `--input name=value`：
+ * - `--input` 与 `--image` 不能混用（CLI 会直接报 ValidationError）
+ * - `--input` 要求逐个写明全部槽位名，v2_1 的语义槽位（scene/style）无法表达
+ * - `--image` 由 CLI 按 spec.inputs 顺序自动填（cli.js:19448 `images.map((value, i) => ({ name: spec.inputs?.[i]?.name ?? "input", value }))`）
+ *
+ * ⚠ 参数一律按**目标工具下的实际声明**过滤 —— CLI 的 matchDeclaredArguments
+ *   对未声明参数直接抛 "未知参数 --X"。
+ */
+export function buildKlingImageArgs(plan: KlingImagePlan): string[] {
+  const args: string[] = [plan.tool];
+  pushFlag(args, "model", plan.spec.model);
+
+  const declared = new Map<string, KlingArgSpec>();
+  for (const a of plan.spec.arguments ?? []) declared.set(a.name, a);
+
+  const resolution = pickDeclaredValue(declared.get("img_resolution"), plan.resolution);
+  if (resolution !== undefined) pushFlag(args, "img_resolution", resolution);
+
+  const ratio = pickDeclaredValue(declared.get("aspect_ratio"), plan.ratio);
+  if (ratio !== undefined) pushFlag(args, "aspect_ratio", ratio);
+
+  const count = pickDeclaredValue(declared.get("imageCount"), String(plan.count));
+  if (count !== undefined) pushFlag(args, "imageCount", count);
+
+  for (const img of plan.images) pushFlag(args, "image", img);
+
+  // prompt 始终显式下发：CLI 对 text_to_image 要求 prompt 非空
+  pushFlag(args, "prompt", plan.prompt);
+
+  args.push("--task-trace-id", plan.traceId);
+  args.push("--quiet");
+  return args;
+}
+
 // ---------- 参数组装 ----------
 
 /**
@@ -538,6 +774,33 @@ export function extractKlingResultUrl(body: unknown): string | undefined {
     if (typeof url === "string" && url) return url;
   }
   const direct = b?.url ?? b?.videoUrl ?? b?.data?.url ?? b?.data?.videoUrl;
+  return typeof direct === "string" && direct ? direct : undefined;
+}
+
+/**
+ * 取结果**图片**地址。
+ *
+ * 与视频侧 extractKlingResultUrl 的优先级相反：图片优先取 `urlWithoutWatermark`。
+ *
+ * 实测（2026-10，image_to_image）：works[] 同时给两个地址 ——
+ * - url                 → p4-fdl，**带水印**（2048×2048 PNG 6.70 MB）
+ * - urlWithoutWatermark → p4-fdl，无水印（同尺寸 5.90 MB）
+ *
+ * 图片是素材（要落到 PR 序列里再导出的），带水印等于把水印烙进成片，
+ * 所以图片侧必须取无水印那个。视频侧维持原样（url 优先），不动既有行为。
+ */
+export function extractKlingImageResultUrl(body: unknown): string | undefined {
+  const b = body as any;
+  const works = Array.isArray(b?.works)
+    ? b.works
+    : Array.isArray(b?.data?.works)
+      ? b.data.works
+      : [];
+  for (const w of works) {
+    const url = w?.urlWithoutWatermark ?? w?.url ?? w?.coverUrl;
+    if (typeof url === "string" && url) return url;
+  }
+  const direct = b?.url ?? b?.imageUrl ?? b?.data?.url ?? b?.data?.imageUrl;
   return typeof direct === "string" && direct ? direct : undefined;
 }
 
