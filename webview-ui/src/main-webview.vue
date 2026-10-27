@@ -30,6 +30,14 @@ import {
 import { minimaxProvider } from "./providers/minimax";
 import { runningHubProvider } from "./providers/runninghub";
 import { arkProvider } from "./providers/ark";
+import {
+  klingProvider,
+  loadKlingModels,
+  klingEnv,
+  bootstrapKlingEnv,
+  getKlingDefaultModel,
+} from "./providers/kling";
+import { KLING_PROVIDER_ID } from "@shared/messages";
 import type { ModelDescriptor } from "./providers/core/types";
 import type { VideoGenProvider } from "./providers/core/VideoGenProvider";
 
@@ -65,16 +73,125 @@ function showToast(msg: string | unknown) {
 }
 
 // ---------- provider 状态 ----------
-/** 当前激活的 provider id（首版本写死 minimax；后续可让用户在设置里切换） */
+/**
+ * 当前激活的 provider id。
+ *
+ * 默认仍是 minimax（老用户无感）；用户可在模型弹层里切到可灵。
+ * 切换后：模型下拉换成新 provider 的清单、默认 model 重置为新 provider 的首个模型、
+ * ratio / duration / resolution 按新模型的 paramConstraints 归一化（constraints 是派生的）。
+ */
 const currentProviderId = ref<string>(DEFAULT_PROVIDER_ID);
 
 /** 当前 provider 实例（异步获取） */
 const currentProvider = ref<VideoGenProvider | null>(null);
 
+/** 已注册的视频 provider 列表（注册后更新，供切换 UI 渲染） */
+const videoProviderList = ref<VideoGenProvider[]>([]);
+
+/**
+ * MiniMax 是否已配 API Key。
+ *
+ * 没配 key 时默认走可灵（走 CLI 登录态，不需要 API Key），
+ * 所以平台栏里可灵要排在前面 —— 用户一进来看到的就是能直接用的那个。
+ */
+const minimaxKeyPresent = ref(false);
+
+/** provider 切换 UI 的选项（id + 显示名） */
+const videoProviderOptions = computed(() => {
+  const opts = videoProviderList.value.map((p) => ({
+    id: p.providerId,
+    label: p.displayName,
+  }));
+  // MiniMax 没 key → 可灵排前面（可直接用的平台优先）
+  if (!minimaxKeyPresent.value) {
+    opts.sort((a, b) =>
+      a.id === KLING_PROVIDER_ID ? -1 : b.id === KLING_PROVIDER_ID ? 1 : 0,
+    );
+  }
+  return opts;
+});
+
+/**
+ * 参考素材区的限制提示。
+ *
+ * 可灵走全能参考（omni_ref_video）时**按秒计费**，且**输入视频的时长会计入总时长** ——
+ * 这是服务端 model declaration 里明确写着「You MUST inform the user」的要求，
+ * 必须在界面上告知，不能只藏在文档里。
+ */
+const videoReferenceTips = computed(() => {
+  const base = "视频≤3 总时长≤15s · 图片≤9";
+  if (currentProviderId.value !== KLING_PROVIDER_ID) return base;
+  const videos = references.value.filter((r) => r.type === "reference_video");
+  if (!videos.length) return base;
+  const total = videos
+    .map((r) => r.durationSec)
+    .filter((d): d is number => typeof d === "number")
+    .reduce((a, b) => a + b, 0);
+  const dur = total ? ` ${Math.round(total * 10) / 10}s` : "";
+  return `可灵按秒计费，输入视频${dur}会计入总时长`;
+});
+
+/**
+ * 当前 provider 的环境异常提示。
+ * 可灵的环境问题（未装 CLI / 未登录 / 清单拉不到）要在模型弹层里直接可见，
+ * 否则用户只看到「没有模型」，不知道为什么。
+ */
+const providerNotice = computed(() => {
+  if (currentProviderId.value !== KLING_PROVIDER_ID) return "";
+  if (klingEnv.value.ready) return "";
+  return klingEnv.value.message || "可灵环境未就绪，请到设置里查看自检结果";
+});
+
 /** 当前 provider 的模型列表（computed） */
 const providerModels = computed<ModelDescriptor[]>(() => {
   return currentProvider.value?.models ?? [];
 });
+
+/**
+ * 切换视频 provider。
+ *
+ * 可灵的模型清单要现拉（`who_am_i`），所以先加载清单再取 provider —— 否则
+ * models 还是空的，model 下拉会空着。
+ */
+async function switchVideoProvider(id: string): Promise<void> {
+  if (id === currentProviderId.value) return;
+  currentProviderId.value = id;
+  if (id === KLING_PROVIDER_ID) {
+    // 拉不到清单时不清空回退硬编码（见 providers/kling）：模型下拉会空，
+    // 设置面板里有环境自检可看具体原因
+    await loadKlingModels();
+  }
+  currentProvider.value = await getProvider(id);
+  const models = currentProvider.value?.models ?? [];
+  // 默认 model：仍能命中就保留（用户可能只是切回来），否则重置为新 provider 的默认模型
+  if (models.length && !models.some((m) => m.modelId === model.value)) {
+    model.value = pickDefaultModelFor(id, models);
+  }
+  // key 按 provider 分槽读取（可灵没有 key，读回来是空串）
+  apiKey.value = (await bridge.getApiKey(id)) || "";
+}
+
+/**
+ * 取某个 provider 的默认模型 id。
+ *
+ * 可灵用服务端下发的 defaultModel（实测 kling-video-v4_0）——
+ * **不能取清单首项**：服务端返回的顺序是
+ * `v2_5, v2_6, o1, v3_0_omni, v3_0, v3_0_turbo, v4_0`，
+ * 首项是旧版 v2_5。
+ */
+function pickDefaultModelFor(
+  providerId: string,
+  models: ModelDescriptor[],
+): string {
+  if (providerId === KLING_PROVIDER_ID) {
+    const klingDefault = getKlingDefaultModel();
+    if (klingDefault && models.some((m) => m.modelId === klingDefault)) {
+      return klingDefault;
+    }
+  }
+  // 清单为空（provider 未加载 / 拉取失败）时返回空串，调用方有 length 守卫
+  return models[0]?.modelId ?? "";
+}
 
 /** 查找当前 provider + modelId 对应的 ModelDescriptor */
 function findModelDescriptor(
@@ -177,6 +294,14 @@ getCurrentInstance()!.appContext.provides[
 };
 
 // ---------- 在飞任务登记表 + 飞书上报(顶层单例) ----------
+// 并发提交上限。
+//
+// 为什么限：可灵走 CLI，每个在飞任务都会每 5s 拉起一个 node 进程轮询
+// （单进程峰值 RSS 实测 312MB）。任务一多，内存和进程数会同时膨胀。
+// UXP 侧已有「同时最多 3 个 CLI 进程」的技术层限流，
+// 这里再加一层产品层限制：不让用户无限制地堆任务。
+const MAX_INFLIGHT_TASKS = 3;
+
 // 多个 composable 需要共享同一个 inflight / polling_ / newTaskUi,以支持
 // 多任务并行 + 切工程时保留非当前工程的在飞任务。因此先创建 useInflight 一次,
 // 然后把它的 API 传给 useSubmit / useGenerationState 等消费方。
@@ -198,6 +323,9 @@ const inflightApi = useInflight({
 // const 没 hoisting,提前访问会 TDZ。
 const state = useGenerationState({
   storageMode,
+  // 参数约束按当前 provider 的 model descriptor 派生（可灵的规格由服务端下发）
+  currentProviderId,
+  findModelDescriptor,
   resumePolling: inflightApi.resumePolling,
   getPersistableInflightRecords: inflightApi.getPersistableInflightRecords,
 });
@@ -218,9 +346,14 @@ const submitApi = useSubmit({
     pollingActive: inflightApi.pollingActive as any,
     registerTransient: inflightApi.registerTransient,
     removeTransient: inflightApi.removeTransient,
+    generatingTaskCount: inflightApi.generatingTaskCount as any,
   },
   reportToFeishu: feishuApi.reportToFeishu,
+  // 可灵「提交即上报」:提交成功拿到实扣灵感值即入账,不等终态
+  reportKlingSubmitted: feishuApi.reportKlingSubmitted,
   recordPromptOptimization: state.recordPromptOptimization,
+  // 同时在飞任务上限(每个在飞任务都要起 CLI 轮询进程)
+  maxInflightTasks: MAX_INFLIGHT_TASKS,
 });
 
 // ---------- 图片生成提交（阶段 2A：RunningHub 文生图） ----------
@@ -291,10 +424,47 @@ const refsApi = useReferences({
 });
 
 // ---------- 提交前置守卫 ----------
+/**
+ * 当前在飞的真实生成任务数。
+ *
+ * inflightApi 在下方才创建，所以这里用 computed 惰性求值
+ * （首次访问一定在 inflightApi 初始化之后）。
+ */
+const inflightCount = computed(() => inflightApi.generatingTaskCount.value);
+
+/** 在飞任务已达上限 → 不能再提交 */
+const inflightLimitReached = computed(
+  () => inflightCount.value >= MAX_INFLIGHT_TASKS,
+);
+
+/** 在飞任务已达上限时的提示文案 */
+const inflightLimitHint = computed(
+  () =>
+    `同时在飞任务已达上限（${MAX_INFLIGHT_TASKS} 个），请等待任务完成后再提交`,
+);
+
+/**
+ * 提交被阻断的原因（给按钮显示用）。
+ *
+ * 只在「没有别的阻断原因」时给出 —— key 缺失 / 没项目等信息量更大，优先显示。
+ */
+const submitBlockedReason = computed(() => {
+  if (!inflightLimitReached.value) return "";
+  // 有更优先的阻断原因时不显示这条
+  if (!apiKey.value && currentProviderId.value !== KLING_PROVIDER_ID) return "";
+  if (!projectInfo.value) return "";
+  return inflightLimitHint.value;
+});
+
 const canSubmit = computed(() => {
-  if (!apiKey.value) return false;
+  // 可灵走 CLI 的 OAuth 登录态，没有 API Key 槽位 —— 不能拿 key 缺失当阻断条件
+  if (!apiKey.value && currentProviderId.value !== KLING_PROVIDER_ID) {
+    return false;
+  }
   if (!prompt.value.trim()) return false;
   if (references.value.length === 0 && ratio.value === "adaptive") return false;
+  // 在飞任务数达上限 → 阻断（避免无限制堆任务，每个任务都要起 CLI 轮询进程）
+  if (inflightLimitReached.value) return false;
   return true;
 });
 
@@ -322,15 +492,48 @@ onMounted(async () => {
   if (!listProviders().find((p) => p.providerId === DEFAULT_PROVIDER_ID)) {
     registerProvider(minimaxProvider);
   }
+  // 注册可灵（经 C++ Hybrid addon 调本机 kling CLI）。
+  // 模型清单由服务端动态下发（who_am_i），不在 mount 时拉取 —— 切到可灵时再按需加载，
+  // 避免每次启动 PR 都白跑一次 CLI。清单加载失败时不清空回退硬编码（见 providers/kling）。
+  if (!listProviders().find((p) => p.providerId === klingProvider.providerId)) {
+    registerProvider(klingProvider);
+  }
+  videoProviderList.value = listProviders();
   // 注册图片 provider（RunningHub + 火山方舟），刷新聚合模型列表
   registerImageProvider(runningHubProvider);
   registerImageProvider(arkProvider);
   imageProviderList.value = listImageProviders();
+
+  // 默认 provider：MiniMax 没配 key 时改用可灵（走 CLI 登录态，不需要 API Key）。
+  // minimax 是老用户的默认路径 —— key 在就保持 minimax（无感），
+  // 没 key 就切可灵，否则用户一进来看到的就是「请配置 API Key」。
+  const minimaxKey = (await bridge.getApiKey(DEFAULT_PROVIDER_ID)) || "";
+  minimaxKeyPresent.value = !!minimaxKey;
+  if (!minimaxKey) {
+    const klingReady = listProviders().some(
+      (p) => p.providerId === KLING_PROVIDER_ID,
+    );
+    if (klingReady) {
+      currentProviderId.value = KLING_PROVIDER_ID;
+      // 可灵的模型清单要现拉（who_am_i）；拿不到就保持空列表，
+      // 由设置面板的环境自检说明原因
+      await loadKlingModels();
+    }
+  }
+
   // 异步获取当前 provider 实例
   currentProvider.value = await getProvider(currentProviderId.value);
   // 按当前视频 provider 读分槽 key(存储层对默认 provider 回落旧单 key);
   // 不传 providerId 只读旧单 key 槽位,而设置面板保存时只写分槽 → 初始永远读到空
   apiKey.value = (await bridge.getApiKey(currentProviderId.value)) || "";
+  // 默认模型：当前 model 不属于新 provider 时,换成该 provider 的默认模型
+  //（可灵是服务端 defaultModel = kling-video-v4_0,不是清单首项 v2_5）
+  {
+    const models = currentProvider.value?.models ?? [];
+    if (models.length && !models.some((m) => m.modelId === model.value)) {
+      model.value = pickDefaultModelFor(currentProviderId.value, models);
+    }
+  }
   // 图片模型智能默认：仅当只配置了一个图片平台（runninghub/ark）的 key 时，
   // 默认选中该平台的首个模型；两个都有 key 或都没有则保持默认（runninghub）
   try {
@@ -369,6 +572,10 @@ onMounted(async () => {
     // 无活动工程,探针意义不大,但仍跑一次以避免切工程之前看起来 stale
     await refreshStorageProbe();
   }
+
+  // 可灵环境自检：先读持久化快照渲染 UI，再后台跑一次真实检测覆盖它。
+  // 不 await —— 启动不等 CLI（首次 >1s，二次有快照兜底）。
+  void bootstrapKlingEnv();
 });
 
 function onSettingsSave(key: string, providerId: string) {
@@ -376,6 +583,10 @@ function onSettingsSave(key: string, providerId: string) {
   //（图片 provider 的 key 由提交链路按 providerId 现读）
   if (providerId === currentProviderId.value) {
     apiKey.value = key;
+  }
+  // MiniMax 的 key 状态变化会影响平台栏排序（没 key 时可灵排前面）
+  if (providerId === DEFAULT_PROVIDER_ID) {
+    minimaxKeyPresent.value = !!key.trim();
   }
   settingsOpen.value = false;
 }
@@ -486,7 +697,7 @@ async function refreshProject() {
       <template v-if="generationMode === 'video'">
         <ReferenceList
           :references="references"
-          tips="视频≤3 总时长≤15s · 图片≤9"
+          :tips="videoReferenceTips"
           @remove="refsApi.removeReference"
           @confirmPending="refsApi.confirmPendingUpload"
         />
@@ -497,14 +708,21 @@ async function refreshProject() {
           v-model:ratio="ratio"
           v-model:duration="duration"
           v-model:resolution="resolution"
+          :providers="videoProviderOptions"
+          :provider-id="currentProviderId"
+          :provider-notice="providerNotice"
           :models="providerModels"
           :constraints="state.constraints.value"
           :has-references="references.length > 0"
           :can-submit="canSubmit"
           :polling="inflightApi.pollingActive.value"
           :has-api-key="!!apiKey"
+          :needs-api-key="currentProviderId !== KLING_PROVIDER_ID"
           :has-project="!!projectInfo"
           :optimizing="submitApi.optimizingPrompt.value"
+          :submit-blocked-reason="submitBlockedReason"
+          :submitting="submitApi.submitting.value"
+          @update:providerId="switchVideoProvider"
           @submit="submitApi.submitGenerate"
           @optimize="submitApi.optimizePrompt"
         />

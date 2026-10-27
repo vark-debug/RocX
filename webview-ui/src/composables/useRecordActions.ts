@@ -134,6 +134,9 @@ export function useRecordActions(
   function statusOf(rec: GenerationRecord): { label: string; color: string } {
     switch (rec.status) {
       case "pending":
+        // pending 里含两段不同的等待，拆开显示让用户看得见卡在哪一步
+        if (rec.pendingStage === "preparing") return { label: "准备素材中", color: "#c9a227" };
+        if (rec.pendingStage === "submitting") return { label: "提交中", color: "#c9a227" };
         return { label: "排队", color: "#888" };
       case "generating":
         return { label: "生成中", color: "#4b9cf5" };

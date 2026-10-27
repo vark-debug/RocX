@@ -1,5 +1,5 @@
 /**
- * 费用估算(从 webhook.ts 抽离)
+ * 费用估算与成本口径(从 webhook.ts 抽离)
  *
  * 价格表与算法集中在本文件,webhook 只负责限流重试 + HTTP 上报。
  *
@@ -9,8 +9,12 @@
  * - 提示词优化:输入 token × 输入单价 + 输出 token × 输出单价(不产视频,与时长口径无关)
  *
  * 价格调整(模型促销 / 协议价等)只动本文件,不涉及 webhook 上报逻辑。
+ *
+ * 可灵(CLI)不在上述估价体系内:它在**提交时即扣费**,真实扣费额随响应返回,
+ * 走 resolveCost 的 CREDITS/actual 分支,绝不折算成人民币元。
  */
 import {
+  KLING_PROVIDER_ID,
   REPORT_PURPOSE,
   type GenerationRecord,
   type ReportPurpose,
@@ -61,16 +65,75 @@ export const TOKEN_PRICE_PER_MILLION = {
  */
 const COST_PRECISION = 3;
 
-/** 记录自带分辨率升级标记时即为升级任务;图片记录(kind=image)固定为图片生成 */
+/**
+ * 结构化成本:区分「单位」与「口径」。
+ *
+ * - `CNY` / `estimated`:MiniMax / RunningHub / Ark 的本地价格表估算,单位人民币元
+ * - `CREDITS` / `actual`:可灵 CLI 的实扣灵感值,随提交响应返回,是真实扣费额
+ *
+ * ⚠ 两种单位**绝不互相折算**:可灵的充值折扣 / 会员等级 / 促销都会改变实际单价,
+ *   写死「灵感值 → 元」汇率必然失准;把实扣值当估算值上报更是数据造假。
+ *   飞书侧「人民币元」与「灵感值」两张表分别求和,不得跨单位相加。
+ */
+export type CostEstimate =
+  | { amount: number; unit: "CNY"; basis: "estimated" }
+  | { amount: number; unit: "CREDITS"; basis: "actual" };
+
+/**
+ * 解析上报用途(purpose)。
+ *
+ * 可灵单独分列(可灵视频生成 / 可灵图片生成):它的成本口径是**实扣灵感值**,
+ * 与其余三家的「本地估算人民币元」不是一回事,飞书侧要分别汇总。
+ *
+ * 其余 provider 的判定逻辑逐字未变:记录自带分辨率升级标记 → 升级任务;
+ * 图片记录(kind=image)→ 图片生成;否则 → 视频生成。
+ */
 export function resolvePurpose(record: GenerationRecord): ReportPurpose {
-  if (record.kind === "image") return REPORT_PURPOSE.IMAGE_GEN;
+  const isKling = record.params?.provider === KLING_PROVIDER_ID;
+  if (record.kind === "image") {
+    return isKling ? REPORT_PURPOSE.KLING_IMAGE_GEN : REPORT_PURPOSE.IMAGE_GEN;
+  }
+  if (isKling) return REPORT_PURPOSE.KLING_VIDEO_GEN;
   return record.upgradedFromResolution
     ? REPORT_PURPOSE.UPSCALE
     : REPORT_PURPOSE.VIDEO_GEN;
 }
 
-/** 估价:视频生成/升级/优化 按各自公式 */
-export function estimateCost(
+/**
+ * 解析一条记录的成本:单位 + 口径 + 金额。
+ *
+ * 可灵(params.provider === "kling"):提交即扣费,creditsConsumed 是服务端随
+ * generationId 一起返回的**真实扣费额** —— 直接采用,绝不用任何本地价格表推算。
+ * 缺失时返回 0(unit=CREDITS + amount=0 表示「扣费未知」,不是「免费」)。
+ *
+ * 其余 provider:走本地价格表估算,金额与改造前 estimateCost **逐字节一致**。
+ */
+export function resolveCost(
+  record: GenerationRecord,
+  purpose: ReportPurpose,
+): CostEstimate {
+  if (record.params?.provider === KLING_PROVIDER_ID) {
+    return {
+      amount:
+        typeof record.creditsConsumed === "number" ? record.creditsConsumed : 0,
+      unit: "CREDITS",
+      basis: "actual",
+    };
+  }
+  return {
+    amount: estimateAmount(record, purpose),
+    unit: "CNY",
+    basis: "estimated",
+  };
+}
+
+/**
+ * 估价:视频生成/升级/优化 按各自公式(人民币元)。
+ *
+ * ⚠ 本函数是改造前的 estimateCost 主体,公式与取值**逐字节原样搬移**,
+ *   现有 provider 的上报金额不得有任何变化。
+ */
+function estimateAmount(
   record: GenerationRecord,
   purpose: ReportPurpose,
 ): number {
@@ -115,4 +178,17 @@ export function estimateCost(
       ? UPGRADE_UNIT_PRICE
       : PRICE_BY_RESOLUTION[record.params?.resolution] ?? 0;
   return round((refSec + outSec) * unitPrice);
+}
+
+/**
+ * 兼容封装:老调用方拿到的仍是一个数字(现有外部调用方不改)。
+ *
+ * ⚠ 可灵记录返回的是**灵感值**而不是人民币元 —— 上报请直接用 resolveCost,
+ *   避免把积分写进「人民币元」列。
+ */
+export function estimateCost(
+  record: GenerationRecord,
+  purpose: ReportPurpose,
+): number {
+  return resolveCost(record, purpose).amount;
 }

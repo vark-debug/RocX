@@ -8,7 +8,7 @@
  */
 import { uxp } from "../globals";
 import { DEFAULT_UXP_PROVIDER_ID } from "./ai/providers/types";
-import type { PromptTemplate } from "@shared/messages";
+import type { KlingEnvSnapshot, PromptTemplate } from "@shared/messages";
 
 /** 自定义提示词模板上限（UI 侧同样限制） */
 export const PROMPT_TEMPLATES_MAX = 10;
@@ -29,6 +29,11 @@ interface PersistedSettings {
   editorName?: string;
   /** 自定义提示词模板（非敏感；上限 PROMPT_TEMPLATES_MAX） */
   promptTemplates?: PromptTemplate[];
+  /**
+   * 可灵环境自检快照（非敏感）。
+   * 存在 settings 文件里（非 secureStorage）——余额 / 会员 / 模型清单都不是密钥。
+   */
+  klingEnv?: KlingEnvSnapshot;
 }
 
 const SECURE_KEY = "rocx.apiKey";
@@ -399,6 +404,50 @@ export const storage = {
     try {
       const s = await readSettings();
       s.dryRun = v;
+      await writeSettings(s);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  },
+
+  /**
+   * 读可灵环境自检快照。
+   *
+   * 快照里可能带模型清单（who_am_i 的 availableModels），体积不小 ——
+   * 写盘时已经限制过（见 setKlingEnvSnapshot）。
+   */
+  async getKlingEnvSnapshot(): Promise<KlingEnvSnapshot | null> {
+    try {
+      const s = await readSettings();
+      const snap = s.klingEnv;
+      if (!snap || typeof snap !== "object") return null;
+      return snap;
+    } catch (e) {
+      console.warn("[storage] 读可灵环境快照失败:", e);
+      return null;
+    }
+  },
+
+  /** 写可灵环境自检快照（覆盖写） */
+  async setKlingEnvSnapshot(
+    snapshot: KlingEnvSnapshot,
+  ): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const s = await readSettings();
+      s.klingEnv = snapshot;
+      await writeSettings(s);
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: String(e?.message || e) };
+    }
+  },
+
+  /** 清空可灵环境自检快照 */
+  async clearKlingEnvSnapshot(): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const s = await readSettings();
+      delete s.klingEnv;
       await writeSettings(s);
       return { ok: true };
     } catch (e: any) {

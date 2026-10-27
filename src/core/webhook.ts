@@ -13,17 +13,18 @@
  * 上报为 fire-and-forget：限流、鉴权、网络故障都不影响生成结果。
  */
 import {
+  KLING_PROVIDER_ID,
   REPORT_PURPOSE,
   type GenerationRecord,
   type ReportPurpose,
 } from "@shared/messages";
 import { projectCore } from "./project";
 import { storage } from "./storage";
-import { estimateCost, resolvePurpose } from "./billing";
+import { estimateCost, resolveCost, resolvePurpose } from "./billing";
 
 // 价格表常量 / 估价算法已迁移到 billing.ts;这里 re-export 保持向后兼容
 // (老调用方通过 webhookCore.estimateCost 引用)。
-export { estimateCost, resolvePurpose };
+export { estimateCost, resolveCost, resolvePurpose };
 
 /** 飞书返回的限流错误码：触发频率超出限制 */
 const RATE_LIMIT_CODE = 800005652;
@@ -104,10 +105,72 @@ async function postOnce(
   return { ok: true, rateLimited: false };
 }
 
+/**
+ * 上报用的 status。
+ *
+ * - 可灵是「提交即上报」:上报发生在提交成功的瞬间,产出尚未可知 → "submitted"
+ * - 其余 provider 都是「终态成功才上报」→ "generated"(失败不上报)
+ *
+ * ⚠ 不要直接透传 record.status:提示词优化上报时传的是占位记录(其 status 仍是
+ *   "pending"),直接透传会让飞书出现「pending」的优化行。
+ */
+function reportStatus(record: GenerationRecord): string {
+  if (record.params?.provider === KLING_PROVIDER_ID) return "submitted";
+  if (record.status === "failed") return "failed";
+  return "generated";
+}
+
+/**
+ * 上报 payload（8 字段）。
+ *
+ * 「estimateCost」与「creditsConsumed」是**两列独立的成本**，绝不折算：
+ * - estimateCost 保持「人民币元」语义，非可灵行填本地估算值，可灵行填 0
+ * - creditsConsumed 是可灵的真实扣费灵感值，非可灵行填 0
+ * - costUnit 标明该行成本属于哪一类，飞书侧两类分别求和，不得跨单位相加
+ */
+export interface ReportPayload {
+  recordId: string;
+  estimateCost: number;
+  creditsConsumed: number;
+  costUnit: "CNY" | "CREDITS";
+  status: string;
+  editorName: string;
+  projectName: string;
+  purpose: ReportPurpose;
+}
+
+/**
+ * 组装上报 payload。
+ *
+ * 独立成函数（而不是内联在 reportGenerated 里）是为了让「改造前后逐条比对」
+ * 这条回归红线可以直接跑在 payload 层，而不用起 UXP 宿主。
+ */
+export function buildReportPayload(
+  record: GenerationRecord,
+  resolved: ReportPurpose,
+  editorName: string,
+  projectName: string,
+): ReportPayload {
+  const cost = resolveCost(record, resolved);
+  return {
+    recordId: record.id,
+    estimateCost: cost.unit === "CREDITS" ? 0 : cost.amount,
+    creditsConsumed: cost.unit === "CREDITS" ? cost.amount : 0,
+    costUnit: cost.unit,
+    status: reportStatus(record),
+    editorName,
+    projectName,
+    purpose: resolved,
+  };
+}
+
 /** 设置页「测试上报」用的固定样例，与飞书表格字段一一对应 */
 const SAMPLE_PAYLOAD = {
   recordId: "a1b2c3d4-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
   estimateCost: 5,
+  creditsConsumed: 0,
+  costUnit: "CNY",
+  status: "generated",
   editorName: "张三",
   projectName: "Nike_春季广告片_剪辑版",
   purpose: REPORT_PURPOSE.VIDEO_GEN,
@@ -182,13 +245,12 @@ export const webhookCore = {
 
     const resolved = purpose || resolvePurpose(record);
     const cur = await projectCore.getCurrent();
-    const payload = {
-      recordId: record.id,
-      estimateCost: estimateCost(record, resolved),
-      editorName: cfg.editorName,
-      projectName: cur ? resolveProjectName(cur) : "",
-      purpose: resolved,
-    };
+    const payload = buildReportPayload(
+      record,
+      resolved,
+      cfg.editorName,
+      cur ? resolveProjectName(cur) : "",
+    );
 
     return await sendWithRetry(cfg.webhookUrl, cfg.token, JSON.stringify(payload));
   },

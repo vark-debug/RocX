@@ -14,7 +14,7 @@
  * 不做:不管理 records 防抖落盘(loadRecords 等在 useGenerationState 里);
  * 不管理 inflight 与 pollingActive 派生(都在 useInflight 里)。
  */
-import { ref, inject } from "vue";
+import { ref, computed, inject } from "vue";
 import { bridge } from "../services/bridge";
 import { getProvider } from "../providers/core/registry";
 import { ensureRefsForProvider } from "./useEnsureRefs";
@@ -22,7 +22,8 @@ import { matchTemplateGate } from "./usePromptTemplates";
 import { getCaptureContext, lockCaptureContext, resetCaptureContext } from "./useCaptureContext";
 import { safeProviderCall } from "./useProviderSafe";
 import { SharedRefsKey } from "../providers/state";
-import { REPORT_PURPOSE } from "@shared/messages";
+import { KLING_PROVIDER_ID, REPORT_PURPOSE } from "@shared/messages";
+import { checkKlingReady } from "../providers/kling";
 import type {
   GenerationRecord,
   VideoRatio,
@@ -59,6 +60,8 @@ export interface UseSubmitInflightApi {
   /** 临时在飞登记(优化占位):不进 records、不落盘 */
   registerTransient: (rec: GenerationRecord) => void;
   removeTransient: (recId: string) => void;
+  /** 派生:真实生成任务数(剔除提示词优化占位) */
+  generatingTaskCount: RefAny<number>;
 }
 
 export function useSubmit(opts: {
@@ -72,8 +75,17 @@ export function useSubmit(opts: {
   inflightApi: UseSubmitInflightApi;
   /** 飞书上报回调(infligh.onTerminalSuccess / optimizePrompt 完成后调用) */
   reportToFeishu: (rec: GenerationRecord, purpose?: any) => void;
+  /** 可灵「提交即上报」回调(提交成功拿到实扣灵感值的瞬间调用) */
+  reportKlingSubmitted?: (rec: GenerationRecord) => void;
   /** 把一次提示词优化结果 push 进持久化数组(不入 records 列表) */
   recordPromptOptimization: (opt: PromptOptimization) => void;
+  /**
+   * 同时在飞任务数上限。
+   *
+   * 每个在飞任务都要起 CLI 轮询进程（可灵单进程峰值 312MB），
+   * 任务无限制堆积会吃满内存。不传则不限制。
+   */
+  maxInflightTasks?: number;
 }) {
   const sharedRaw = inject(SharedRefsKey);
   if (!sharedRaw) {
@@ -84,6 +96,15 @@ export function useSubmit(opts: {
   const { inflightApi } = opts;
   const { polling_, commitInflight, resumePolling, pollingActive, registerTransient, removeTransient } = inflightApi;
   const optimizingPrompt = ref(false);
+
+  /**
+   * 正在提交的任务数（引用计数）。
+   *
+   * 用于「提交中」按钮态：点击后立即有反馈，不用等 2-3s 的 createVideo 返回。
+   * 用计数而非布尔 —— 允许多任务并发提交时，一个完成不会误清另一个的态。
+   */
+  const submittingCount = ref(0);
+  const submitting = computed(() => submittingCount.value > 0);
 
   /**
    * 取本次提交应归属的工程。
@@ -125,6 +146,27 @@ export function useSubmit(opts: {
 
   // ---------- 提交生成 ----------
   async function submitGenerate() {
+    // 提交中计数：点击后立即进入 loading 态（按钮给反馈），做完再退出
+    submittingCount.value++;
+    try {
+      await doSubmitGenerate();
+    } finally {
+      submittingCount.value = Math.max(0, submittingCount.value - 1);
+    }
+  }
+
+  async function doSubmitGenerate() {
+    // 并发提交上限：每个在飞任务都要起 CLI 轮询进程（可灵单进程峰值 312MB），
+    // 任务无限制堆积会吃满内存 → 这里从源头拦住。
+    if (
+      opts.maxInflightTasks &&
+      inflightApi.generatingTaskCount.value >= opts.maxInflightTasks
+    ) {
+      opts.showToast(
+        `同时在飞任务已达上限（${opts.maxInflightTasks} 个），请等待任务完成后再提交`,
+      );
+      return;
+    }
     // 模板闸门：提示词与模板原样一致（未改 {xxx} 预填）时拦截
     const gate = matchTemplateGate(shared.prompt.value, "video");
     if (gate) {
@@ -135,14 +177,13 @@ export function useSubmit(opts: {
       );
       return;
     }
-    const apiKey = shared.apiKey.value;
-    if (!apiKey) return;
-    const owner = await resolveSubmitOwner();
-    if (!owner || !owner.path) {
-      opts.showToast("无活动 PR 项目，无法记录生成历史");
-      return;
-    }
+    const apiKey = shared.apiKey.value ?? "";
+    // 可灵走 CLI 的浏览器 OAuth 登录态（~/.kling/.credentials），**没有 API Key 槽位**；
+    // 其余 provider 仍必须配 key。
+    const isKling = opts.currentProviderId.value === KLING_PROVIDER_ID;
+    if (!apiKey && !isKling) return;
     // 按 capability 校验当前模型是否支持视频生成(provider 抽象)
+    // 纯本地查表(无 await)，放最前面 —— 失败时不该产生任何 UI 变化
     const currentModelDesc = opts.findModelDescriptor(
       shared.model.value,
       opts.currentProviderId.value,
@@ -155,7 +196,18 @@ export function useSubmit(opts: {
       opts.showToast("当前模型不支持视频生成");
       return;
     }
+    // 归属解析：抓过素材时是同步的(锁定值)；纯文生视频才要问一次 UXP(约 50ms)
+    const owner = await resolveSubmitOwner();
+    if (!owner || !owner.path) {
+      opts.showToast("无活动 PR 项目，无法记录生成历史");
+      return;
+    }
 
+    // ---- 乐观 UI：先落卡片，再做慢操作 ----
+    //
+    // 之前是「等所有校验/上传完 → 建卡片」，导致点击后 2.5-4s 毫无反馈
+    // （可灵 checkKlingReady 的 CLI account 1.8s + createVideo 提交 2-3s）。
+    // 现在先插 pending 卡片，UI 立刻可见；后续任何失败都把卡片转 failed。
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     // 抓帧→PS 路径下,pendingUpload=true 的 ref 还差 fileId(用户没点修改完成),
@@ -167,17 +219,6 @@ export function useSubmit(opts: {
         `已跳过 ${skipped} 张「✏ PS 中」的参考素材，请先点「修改完成」再生成`,
       );
     }
-    // fileId 与 provider 绑定：换 provider 提交时现场补传，失败/未上传的跳过
-    const ensured = await ensureRefsForProvider(
-      refsForSubmit,
-      opts.currentProviderId.value,
-    );
-    if (ensured.skipped > 0) {
-      opts.showToast(
-        `已跳过 ${ensured.skipped} 条参考素材（未上传完成或换 provider 后补传失败）`,
-      );
-    }
-    const refsReady = ensured.refs;
     const newRec: GenerationRecord = {
       id,
       createdAt: now,
@@ -189,8 +230,10 @@ export function useSubmit(opts: {
         resolution: shared.resolution.value,
         provider: opts.currentProviderId.value,
       },
-      references: [...refsReady],
+      references: [...refsForSubmit],
       status: "pending",
+      // pending 细分：先「准备素材」（CLI 自检 + 参考素材上传/直链回填）
+      pendingStage: "preparing",
       submittedAt: now,
       // 归属标记:抓素材时锁定(纯文生视频为点击瞬间的实时活动工程),
       // 任务完成后按此落盘,不受后续切换影响
@@ -215,18 +258,66 @@ export function useSubmit(opts: {
       shared.ratio.value = "16:9";
     }
 
-    // 走 registry 取当前 provider（不再硬编码 MiniMax 实例）
-    const provider = await getProvider(opts.currentProviderId.value);
-    if (!provider) {
+    /** 乐观卡片转失败：慢操作出错时用它更新 UI */
+    const failRecord = (message: string) => {
       const idx = shared.records.value.findIndex((r) => r.id === id);
       if (idx >= 0) {
         shared.records.value[idx] = {
           ...shared.records.value[idx],
           status: "failed",
-          error: { message: `provider "${opts.currentProviderId.value}" 未注册` },
+          pendingStage: undefined,
+          error: { message },
         };
       }
+    };
+
+    // 可灵提交前自检：CLI 未装 / 未登录 / 余额不足 → 明确提示并阻断
+    // （余额检查已改为不阻塞：只读已知余额，真实刷新在后台跑）
+    if (isKling) {
+      const env = await checkKlingReady();
+      if (!env.ok) {
+        opts.showToast(env.message);
+        failRecord(env.message);
+        return;
+      }
+    }
+    // fileId 与 provider 绑定：换 provider 提交时现场补传，失败/未上传的跳过
+    const ensured = await ensureRefsForProvider(
+      refsForSubmit,
+      opts.currentProviderId.value,
+    );
+    if (ensured.skipped > 0) {
+      opts.showToast(
+        `已跳过 ${ensured.skipped} 条参考素材（未上传完成 / 类型不支持 / 补传失败）`,
+      );
+    }
+    // 补传后的素材回填到卡片（可灵走本地路径时 refs 不变）
+    if (ensured.refs.length !== newRec.references.length) {
+      const idx = shared.records.value.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
+          references: [...ensured.refs],
+        };
+      }
+    }
+    const refsReady = ensured.refs;
+
+    // 走 registry 取当前 provider（不再硬编码 MiniMax 实例）
+    const provider = await getProvider(opts.currentProviderId.value);
+    if (!provider) {
+      failRecord(`provider "${opts.currentProviderId.value}" 未注册`);
       return;
+    }
+    // pending 细分推进：素材已就绪，接下来是提交任务
+    {
+      const idx = shared.records.value.findIndex((r) => r.id === id);
+      if (idx >= 0) {
+        shared.records.value[idx] = {
+          ...shared.records.value[idx],
+          pendingStage: "submitting",
+        };
+      }
     }
     const reqPayload: VideoGenCreateRequest = {
       model: shared.model.value,
@@ -234,7 +325,9 @@ export function useSubmit(opts: {
       ratio: shared.ratio.value,
       duration: shared.duration.value,
       resolution: shared.resolution.value,
-      references: newRec.references,
+      // 用**补传后**的素材（refsReady），不是乐观卡片里的原始 refs ——
+      // 换 provider 提交时 fileId 是现场补传的
+      references: refsReady,
     };
     if (__ROCX_DRY_RUN__) {
       // 调试模式：仅打印请求，不实际发送
@@ -252,6 +345,7 @@ export function useSubmit(opts: {
           ...shared.records.value[idx],
           taskId: task_id,
           status: "generating",
+          pendingStage: undefined,
           // @ts-ignore
           dryRunPayload: null,
         };
@@ -272,21 +366,37 @@ export function useSubmit(opts: {
           shared.records.value[idx] = {
             ...shared.records.value[idx],
             status: "failed",
+            pendingStage: undefined,
             error: r.error,
           };
         }
         return;
       }
       const task_id = r.data.taskId;
+      // 可灵提交即扣费:实扣灵感值随提交响应返回,必须落进记录
+      // (随 records 持久化;终态失败时用于本地对账)
+      const patch: Partial<GenerationRecord> = {
+        taskId: task_id,
+        status: "generating",
+        pendingStage: undefined,
+        ...(typeof r.data.creditsConsumed === "number"
+          ? { creditsConsumed: r.data.creditsConsumed }
+          : {}),
+      };
       const idx = shared.records.value.findIndex((rec) => rec.id === id);
       if (idx >= 0) {
         shared.records.value[idx] = {
           ...shared.records.value[idx],
-          taskId: task_id,
-          status: "generating",
+          ...patch,
         };
       }
-      resumePolling({ ...newRec, taskId: task_id, status: "generating" });
+      const runRec: GenerationRecord = { ...newRec, ...patch };
+      // 可灵:提交即上报(积分在提交时已扣且失败不退,等终态会「扣了钱但查无记录」;
+      // 终态路径对可灵不再上报,避免同一笔费用记两次)
+      if (newRec.params.provider === KLING_PROVIDER_ID) {
+        opts.reportKlingSubmitted?.(runRec);
+      }
+      resumePolling(runRec);
     }
   }
 
@@ -624,6 +734,8 @@ export function useSubmit(opts: {
   return {
     /** 状态 */
     optimizingPrompt,
+    /** 派生:有提交正在进行(按钮 loading 态) */
+    submitting,
     /** 行为 */
     submitGenerate,
     upgradeTo2K,

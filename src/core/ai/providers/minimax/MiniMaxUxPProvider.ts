@@ -58,7 +58,10 @@ export class MiniMaxUxPProvider implements UxPProvider {
         return { ok: false, error: `HTTP ${r.status} ${txt.slice(0, 200)}` };
       }
       const json = (await r.json()) as {
-        file?: { file_id?: string };
+        // ⚠ MiniMax 的 file_id 是 int64，JSON 里是**数字**（官方文档：file_id int64）。
+        // 必须在这里归一化成 string：调用方（ReferenceItem.fileId）按 string 用，
+        // 直接透传会让下游的 .trim() 等字符串方法炸掉。
+        file?: { file_id?: string | number };
         base_resp?: { status_code?: number; status_msg?: string };
       };
       const statusCode = json?.base_resp?.status_code ?? 0;
@@ -68,8 +71,11 @@ export class MiniMaxUxPProvider implements UxPProvider {
           error: json?.base_resp?.status_msg || `base_resp.status_code=${statusCode}`,
         };
       }
-      const fileId = json?.file?.file_id;
-      if (!fileId) return { ok: false, error: "响应缺少 file_id" };
+      const rawFileId = json?.file?.file_id;
+      if (rawFileId === undefined || rawFileId === null || rawFileId === "") {
+        return { ok: false, error: "响应缺少 file_id" };
+      }
+      const fileId = String(rawFileId);
       return { ok: true, fileId };
     } catch (e: any) {
       return { ok: false, error: String(e?.message || e) };

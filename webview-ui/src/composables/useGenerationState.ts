@@ -20,17 +20,24 @@ import { deletedRecordIds } from "./useRecordEdit";
 import {
   VIDEO_PARAM_CONSTRAINTS,
   type GenerationRecord,
-  type VideoModel,
   type VideoParamConstraints,
   type ProjectRecords,
   type PromptOptimization,
 } from "@shared/messages";
+import type { ModelDescriptor } from "../providers/core/types";
 
 type RefAny<T> = { value: T };
 
 export function useGenerationState(opts: {
   /** 不进 SharedRefs:storageMode 仅持久化层使用 */
   storageMode: RefAny<"primary" | "fallback">;
+  /** 当前激活的视频 provider id（约束按它派生的 model descriptor 取） */
+  currentProviderId: RefAny<string>;
+  /** 按 provider + modelId 查 model descriptor（约束的权威来源） */
+  findModelDescriptor: (
+    modelId: string,
+    providerId?: string,
+  ) => ModelDescriptor | null;
   /** 故障恢复时，扫描到 generating 记录就调它 */
   resumePolling: (rec: GenerationRecord) => void;
   /**
@@ -48,9 +55,36 @@ export function useGenerationState(opts: {
   }
   // 窄化别名：const 初始化取 rvalue 的窄化类型，闭包内不再 possibly undefined
   const shared = sharedRaw;
-  const constraints = computed<VideoParamConstraints>(
-    () => VIDEO_PARAM_CONSTRAINTS[shared.model.value as VideoModel],
-  );
+  /**
+   * 当前模型的参数约束。
+   *
+   * 权威来源是**当前 provider 的 model descriptor.paramConstraints**：
+   * 可灵的模型与参数规格由服务端动态下发（`who_am_i`），不在本地约束表里；
+   * 写死全局表会在可灵更新模型的当天失准。
+   * 描述符找不到时（老记录 / provider 未注册）回落到本地表，再兜底空约束。
+   */
+  const constraints = computed<VideoParamConstraints>(() => {
+    const desc = opts.findModelDescriptor(
+      shared.model.value,
+      opts.currentProviderId.value,
+    );
+    if (desc) {
+      return {
+        resolutions: desc.paramConstraints.resolutions,
+        durations: desc.paramConstraints.durations,
+        ratios: desc.paramConstraints.ratios,
+        ratioAdaptiveAllowed: desc.paramConstraints.ratioAdaptiveAllowed,
+      };
+    }
+    return (
+      VIDEO_PARAM_CONSTRAINTS[shared.model.value] ?? {
+        resolutions: [],
+        durations: [],
+        ratios: [],
+        ratioAdaptiveAllowed: false,
+      }
+    );
+  });
 
   /**
    * 提示词优化历史(同盘,不入 records 列表)。
@@ -62,6 +96,9 @@ export function useGenerationState(opts: {
   // 限制 ratio/duration/resolution 在当前模型下合法
   watch(shared.model, () => {
     const c = constraints.value;
+    // 约束未知时**不做归一化**：provider 清单还没拉到、或模型不在任何表里，
+    // 此时 c.resolutions[0] 是 undefined，赋值会把参数写成 undefined
+    if (!c.resolutions.length || !c.durations.length) return;
     if (!c.resolutions.includes(shared.resolution.value)) {
       shared.resolution.value = c.resolutions[0];
     }
@@ -136,6 +173,12 @@ export function useGenerationState(opts: {
         // 这里显式清掉，避免历史 record 里残留误判（实际根本不会写盘，仅作防御）。
         references: rec.references.map((ref) => {
           const { pendingUpload: _ignored, ...rest } = ref as any;
+          // 历史数据兼容：MiniMax 上传接口的 file_id 是 int64，早期记录里存的是
+          // JSON 数字（449102226891047 这种），而 ReferenceItem.fileId 约定是 string。
+          // 统一转成 string，避免下游 .trim() / URL 判定炸掉。
+          if (typeof rest.fileId === "number") {
+            return { ...rest, fileId: String(rest.fileId) };
+          }
           return rest;
         }),
         // 归属收养（adoption）：磁盘读出的记录一律重打为当前工程的 guid/path。
