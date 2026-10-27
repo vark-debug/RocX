@@ -84,6 +84,9 @@ manifest 的 `requiredPermissions.network.domains` 已按当前 provider 维护�
 
 > 若双击安装无效，可在 [UXP Developer Tool](https://developer.adobe.com/photoshop/uxp/2022/uxp-developer-tools/) 中 Import 并 Load 本 CCX 包。
 
+> 🤖 **让 AI Agent 代装**（无人值守、含可灵 CLI 安装与登录引导）：见 **[docs/agent-install.md](docs/agent-install.md)**。
+> 该文档面向执行安装的 agent，给出可直接运行的命令、前置探测、校验脚本与故障速查表。
+
 ## 使用步骤
 
 ### 1. 配置 API Key

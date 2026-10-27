@@ -4,6 +4,119 @@
 >
 > **追溯补录（2026-10-25）**：v0.4.0 发布时未同步写入本文件，以下章节由 [GitHub Release](https://github.com/vark-debug/RocX/releases/tag/v0.4.0) 正文回填。
 
+## 未发布（拟 v0.5.0）
+
+新增**可灵（Kling）视频生成平台**，并首次引入「积分制」成本口径 —— 可灵按灵感值计费、提交即扣费，与其余三家的「人民币元估算」不是一套账。
+
+### 新增
+
+- **可灵视频生成 provider**（走本机 `kling` CLI，非 HTTP API）
+  - 文生视频 `text_to_video` / 图生视频 `image_to_video`，参考图传本地路径由 CLI 自动上传，公网 URL 直传不下载重传
+  - **全能参考 `omni_ref_video`**：参考视频 + 参考图 + 提示词 → 新视频（视频 → 视频）。参考视频按服务端声明只能走这个工具
+  - **模型清单由服务端动态下发**（`who_am_i` → `availableModels`），不硬编码；清单拉取失败时禁用提交并回退到设置面板自检
+  - 参数按目标工具的模型声明过滤下发（CLI 对未声明参数直接报错）
+  - C++ addon 新增 `runCommand`（macOS `posix_spawn` / Windows `CreateProcessW`），异步不阻塞 JS 线程
+- **平台切换 UI**：模型弹层顶部新增「平台」一栏（MiniMax / 可灵），切换后模型清单、默认模型、参数约束、API Key 分槽同步
+- **可灵环境自检**（设置面板）：CLI 是否安装 / 是否登录 / 会员等级 / 灵感值余额 / 可用模型数，支持「重新检测」
+- **积分制成本结构化**：`CostEstimate = { amount, unit, basis }`，可灵走 `CREDITS` / `actual`（实扣值），其余三家走 `CNY` / `estimated`（本地价格表估算），**两种单位绝不互相折算**
+- **飞书上报适配**
+  - payload 扩为 8 字段：新增 `creditsConsumed` / `costUnit` / `status`
+  - 可灵「**提交即上报**」：拿到 `generationId` + `creditsConsumed` 的瞬间入账，终态成功 / 失败均**不重复上报**
+  - 可灵任务失败时仍保留 `creditsConsumed`，便于本地对账
+
+### 变更
+
+- **参数约束的派生源**从全局表 `VIDEO_PARAM_CONSTRAINTS[modelId]` 改为**当前 provider 的 model descriptor**（MiniMax 行为不变；可灵的规格由服务端下发，不在本地表里）
+- `VideoModel` / `VideoResolution` / `VideoRatio` 放宽为可接受 provider 自定义取值（保留已知值的字面量补全）
+- 参考素材的抓取 / 选择路径按 provider 区分：可灵走 CLI，由 CLI 自己上传素材，不再调用 provider 的文件上传接口
+- 飞书多维表格需新增「灵感值」「计费单位」「状态」三列；**人民币元与灵感值两张表分别求和，不得跨单位相加**
+- 新增 `npm run typecheck`（`tsc` + `vue-tsc`）；仓库此前没有 `vue-tsc`，`.vue` 文件的 `<script setup>` 实际未被类型检查
+- **可灵 CLI 环境自检状态持久化**
+  - 之前：检测结果只存在内存（模块级 ref），插件重启即丢；检测只在「打开设置面板」或「切到可灵 provider」时触发
+  - 现在：检测结果（就绪态 / 余额 / 会员 / 模型清单）写入 `app-settings.json` 的 `klingEnv` 字段
+    - 全新安装：跑一次真实检测并落盘
+    - 二次启动：先读快照渲染 UI（余额/模型立即可见，无需等 CLI），再后台静默刷新覆盖
+    - 失败态快照（未装 CLI / 未登录）下次启动会**立即重试检测** —— 用户很可能刚装好/刚登录
+  - 快照存在 settings 文件而非 secureStorage：余额 / 会员 / 模型清单都不是密钥
+  - 设置面板新增「上次检测」时间显示（快照可能来自上一次启动，需要让用户知道余额的测量时间）
+- **未配置 MiniMax API Key 时默认走可灵**
+  - 之前：默认 provider 恒为 minimax，没配 key 的新用户一进来就看到「请配置 API Key」，而可灵（走 CLI 登录态，**不需要 API Key**）明明可用
+  - 现在：启动时读 minimax 的 key —— 没配就默认切到可灵，并把平台栏里可灵排到前面（可直接用的平台优先）；已配 key 的老用户保持 minimax，不受影响
+  - 可灵的默认模型取**服务端下发的 `defaultModel`**（实测 `kling-video-v4_0`）—— **不能取清单首项**：服务端返回顺序是 `v2_5, v2_6, o1, v3_0_omni, v3_0, v3_0_turbo, v4_0`，首项是旧版 v2_5
+  - 设置面板里补配 / 清除 minimax key 后，平台栏排序实时跟随
+- **可灵 CLI 并发限流 + 提交并发上限**
+  - 问题背景：每次可灵 CLI 调用都会 fork 一个独立 node 进程（单进程峰值 RSS 实测 `query_tasks` 312MB / `who_am_i` 352MB —— node 要加载 CLI 那份 17k 行 esbuild 产物 + 111 个依赖）。16 个并发实测吃掉 **2.2GB** 内存，在 PR 里再叠加渲染/编解码就会明显卡顿
+  - 放大器是**轮询**：每个在飞任务一个独立定时器，每 5s 各拉起一个 node 进程
+  - 修复 1（技术层，UXP 侧）：`klingCli.ts` 加信号量，**同时最多 3 个 CLI 业务进程**，超出的排队（FIFO）
+    - 限流点选在真正起进程之前（`runCommand` 之前）；CLI 定位探测不纳入限流（只在首次跑一次，且必须串行）
+    - 排队等待上限 30s，超时则放弃并明确报错「可灵 CLI 请求排队超时」—— 不能让用户看到「生成中」卡死实际在排队
+    - 槽位在异常路径也会释放（不泄漏）
+  - 修复 2（产品层，webview 侧）：**同时在飞任务数上限 3**
+    - 提交前拦截（`submitGenerate` 入口）+ 按钮禁用（`canSubmit`）+ 按钮直接显示原因文案
+    - 计数剔除「提示词优化占位」（临时登记，不产生视频、不占 CLI 进程）
+  - 尚未做：改用 CLI 原生 `query_tasks --poll`（单进程内部轮询，内存占用只有插件侧轮询的 1/3.4）—— 涉及轮询状态机重构，留待后续
+- **提交乐观 UI**（点击「生成」后 UI 立刻响应，不再有 2.5-4s 空窗）
+  - 问题背景：可灵提交链路全是慢操作 —— `kling account` 实测 1.84s、`kling who_am_i` 1.66s、CLI 提交 2-3s。旧实现是「全部校验/上传完 → 建卡片」，用户点完按钮后 2.5-4s 内界面毫无变化
+  - 修复 A（**关键**）：**先落 pending 卡片，再做慢操作**
+    - 记录创建与 `records.unshift` 提到所有慢 `await` 之前，UI 在 ~50ms 内可见
+    - 慢操作任一环节失败，乐观卡片就地转 `failed`（带错误信息），不再「无声消失」
+    - 提交 payload 用**补传后**的素材（换 provider 提交时 `fileId` 是现场补传的），与卡片里展示的原始 refs 区分开
+    - 纯本地校验（capability 是否支持视频生成）提到最前 —— 失败时不该产生任何 UI 变化
+  - 修复 B：**余额检查不再阻塞提交**
+    - `checkKlingReady` 改为只读**已知**余额（可能是上次快照值）判断，不等 `kling account` CLI
+    - 真实余额刷新放后台跑（`void refreshKlingAccount()`，失败静默），刷新后的值写回环境状态并落盘快照
+    - 代价：快照过期时可能漏挡「余额已归零」，但服务端会明确拒绝并带回充值链接，代价可控
+  - 修复 C：**提交按钮 loading 态**
+    - 点击后按钮立刻变「提交中...」并禁用，给即时反馈（引用计数实现，多任务并发提交时一个完成不会误清另一个的态）
+    - 提交在途时重复点击被忽略（`onSubmitClick` 守卫）
+  - 验证：新增 10 组回归（测真实 `useSubmit` / `checkKlingReady` 代码），覆盖乐观卡片落点、失败转 failed、余额不阻塞、引用计数等
+- **可灵素材预上传：点「生成」→「生成中」的空窗从 ~10s 压到 ~2.5s**
+  - 问题背景：素材以**本地路径**交给可灵 CLI 时，CLI 会在提交命令内部现传 CDN —— http.log 实测 `POST /api/mcp/files` 耗时 4.0-8.7s（4MB mp4）。这段全部落在「pending 卡片已出、status 还没切成 generating」的空窗里，用户只看到「排队」干等 10 秒
+  - 破局点：CLI 的 `resolveFileUrl` 对 http(s) 是**直通不重传**的（`if (/^https?:\/\//.test(file)) return file;`）—— 所以只要提前把素材传成可灵 CDN 直链，提交时传 URL 即可跳过 CLI 内部的整段上传
+  - 修复 A（**关键**）：抓素材时**后台预上传**拿 CDN 直链，提交时直链就绪
+    - 新增 `webview-ui/src/providers/kling/klingPreUpload.ts`：后台调 `kling file_upload <path> --quiet` 取直链（实测 `body.url` / `body.data.url`）
+    - 接入点全覆盖：抓帧 / 抓视频 / 抓帧→PS 的「修改完成」/ 选文件添加 / 用生成结果作参考（`useReferences.ts` 五个入口）
+    - 直链存 `ReferenceItem.klingFileUrl`（**不占用 `fileId`** —— `fileId` 语义是「provider 自家文件服务的 id」且与 `uploadProvider` 绑定，可灵没有这层服务，混用会污染 minimax 的换 provider 补传逻辑）
+    - 实测：预上传 5.75s（4MB mp4）从「提交路径」搬到「抓素材路径」，用户写 prompt 的那几十秒正好覆盖掉；提交侧只剩 CLI 冷启 + `who_am_i` 能力发现（实测 856ms）+ 提交往返（~1s）
+  - 修复 B（**兜底，不阻断**）：预上传失败 / 直链过期 → 保持本地路径，由 CLI 自行上传（与改造前完全一致的行为）
+    - 直链 TTL 取 6 小时（保守）：可灵 CDN 对象侧实测过期在 16 天量级（`x-oss-expiration`），但签名参数另有有效期，旧直链实测会 403
+    - 过期回退本地路径重传（宁可慢，不可错）
+    - 预上传失败**不重试**，避免同一次提交里连传两遍
+  - 修复 C（**文案细化**）：「排队」拆成两段可见状态
+    - `GenerationRecord.pendingStage` 新增 `preparing` / `submitting`
+    - pending 卡片显示「准备素材中」（CLI 自检 + 素材上传/直链回填）→「提交中」（provider 提交接口）→ 终态清空该字段
+  - 配套（**防止预上传反而堵住提交**）：UXP 侧 CLI 通道按优先级分级
+    - `klingCli.ts` 的并发信号量拆成前台 / 后台双队列：前台（提交 / 轮询）优先，后台（预上传）让位
+    - 后台预上传可被用户点「生成」后的前台请求插队，避免预上传占满 3 个槽位把提交堵在队列里
+  - 验证（无头集成测试，真实代码 + mock bridge）
+    - 预上传模块 13 组：直链回填 / 同一路径只起一次任务 / 失败不阻断 / 过期清直链 / 直链复用
+    - CLI 优先级队列 12 组：3 个后台占满槽位 → 前台提交插队先启动；排队超时返回明确错误且不泄漏槽位
+    - 真实 CLI 实测：`file_upload` 5.75s（4MB mp4，含空格路径经 argv 传参）、`who_am_i` 856ms、直链 HEAD 200（`video/mp4` / 4033258 bytes）
+    - `npm run typecheck` + `npm run build` 全通过
+
+### 修复
+
+- **可灵提交多行提示词时报「可灵拒绝了当前参数：Usage: kling omni_ref_video ...」**
+  - 根因：可灵 CLI 的 `parseFlags` 用正则 `/^--([A-Za-z][A-Za-z0-9_-]*)=(.*)$/` 匹配 `--flag=value` 形式，而 JS 正则的 `.` **默认不匹配换行** —— `--prompt=第一行\n第二行` 整条匹配失败被丢弃，CLI 判定「没给 prompt」，于是把整段 usage 打到 stderr 并 `exit 1`
+  - 影响面：所有可灵视频命令（`text_to_video` / `image_to_video` / `omni_ref_video`），与是否使用全能参考无关
+  - 修复：参数组装按值内容智能选型 —— 值以 `--` 开头走等号形式，其余（含换行）走 `--flag 值` 分离形式；两种形式均由 CLI 源码与真实 CLI 实测确认
+  - 兜底：CLI 的 usage 文本（3000+ 字符）不再原样甩给用户，改为一句可行动的中文提示
+- **MiniMax 上传的参考素材 `fileId` 是数字导致可灵提交崩溃**（`(e.fileId||"").trim is not a function`）
+  - 根因：MiniMax 上传接口的 `file_id` 是 int64（JSON 数字），代码却按 string 使用；在 minimax 模式抓的素材切到可灵后，`.trim()` 作用在数字上直接抛错
+  - 修复：UXP 侧上传结果统一 `String()` 归一化；可灵侧 `referenceSource` 加类型守卫（非字符串按无 fileId 处理，走本地路径）；读盘时把历史记录里的数字型 `fileId` 转成 string
+  - 兼容性：归一化前后 `mm_file://<id>` 拼接结果完全一致，minimax 侧请求语义不变
+- **可灵生成结果下载失败**（`下载失败: Permission denied to the url https://v2-fdl.kechuangai.com/... . Manifest entry not found.`）
+  - 根因：UXP 的 `requiredPermissions.network.domains` 是网络白名单，域名不在表里就拒绝请求。可灵接入时漏加 CDN 域名（`uxp.config.ts` 当时留的是未经验证的 `api.klingai.com` / `cdn.klingai.com`，这两个域名实际不存在）
+  - 修复：补 `https://*.kechuangai.com` 与 `https://*.klingai.com`（`network.domains` 与 `webview.domains` 同步）；原先的猜测条目一并删除
+  - 为什么必须通配：CDN 主机名含分片编号（实测见过 `v2-` / `v4-` / `p2-` / `p4-`），且主域名本身迁移过（`*.klingai.com` → `*.kechuangai.com`），路径前缀也变过（`/ksc2/` → `/bs2/upload-ylab-stunt/`）
+  - 说明：可灵的 API / OAuth / 上传票据请求由 CLI 子进程（node）发出，是独立 OS 进程，不受 UXP 白名单约束；白名单只管 UXP 侧下载生成结果
+
+### 兼容性
+
+- **现有 provider 的飞书上报数据零变化**：估价金额、purpose、上报时机均与改造前逐条一致（回归比对 294 条 payload + 260 条估价用例）
+- 可灵功能依赖 Adobe PR ≥ 26.2（C++ Hybrid addon）与本机已安装的 `kling` CLI；两者任一缺失时仅可灵功能不可用，其余功能不受影响
+- 插件 manifest 无变更
+
 ## v0.4.1 (2026-10-15)
 
 新增**提示词模板**功能，提升重复性提示词的录入效率。
