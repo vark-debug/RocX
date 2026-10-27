@@ -125,8 +125,19 @@ const manifest: UXP_Manifest = {
         "https://*.feishu.cn",
         // 钉钉连接器 webhook（测试用）
         "https://connector.dingtalk.com",
+        // Kling 生成结果 CDN。
+        //
+        // ⚠ 必须通配，且两个主域名都要：
+        //   - 主机名含分片编号，实测见过 v2- / v4-（kechuangai.com）与 p2- / p4-（klingai.com），
+        //     编号会随 CDN 调度变化，写死单个主机迟早失效。
+        //   - 主域名本身迁移过：2026-07 前后从 *.klingai.com 换成了 *.kechuangai.com。
+        //   - 路径前缀也变过（/ksc2/ 与 /bs2/upload-ylab-stunt/）。
+        //
+        // 可灵的 API / OAuth / 上传票据请求由 CLI 子进程（node）发出，是独立 OS 进程，
+        // 不受 UXP network.domains 约束 —— 这里只管 UXP 侧下载生成结果。
+        "https://*.kechuangai.com",
+        "https://*.klingai.com",
         // 扩展 provider 时在此追加，例如：
-        // Kling: "https://api.klingai.com", "https://cdn.klingai.com"
         // Runway: "https://api.runwayml.com", "https://cdn.runwayml.com"
       ],
     },
@@ -149,6 +160,10 @@ const manifest: UXP_Manifest = {
         "https://www.runninghub.cn",
         // 火山方舟 Ark 图片 provider：webview 侧 createImage fetch（同步 API）+ 结果 CDN
         "https://*.volces.com",
+        // Kling 生成结果 CDN：webview 侧图片记录预览会直连 resultUrl（RecordFeedBlock / RecordsPanel），
+        // 视频走本地 workFile（容器内 file://）不触网。通配理由同 network.domains。
+        "https://*.kechuangai.com",
+        "https://*.klingai.com",
       ],
       enableMessageBridge: "localAndRemote",
     },

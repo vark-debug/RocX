@@ -42,6 +42,13 @@ export const bridge = {
   reportGenerated: (record: any, purpose?: any) =>
     ensure().reportGenerated(record, purpose),
   testFeishuReport: () => ensure().testFeishuReport(),
+  klingCliExec: (
+    args: string[],
+    opts?: { timeoutMs?: number; priority?: "foreground" | "background" },
+  ) => ensure().klingCliExec(args, opts),
+  getKlingEnvSnapshot: () => ensure().getKlingEnvSnapshot(),
+  setKlingEnvSnapshot: (snapshot: any) => ensure().setKlingEnvSnapshot(snapshot),
+  clearKlingEnvSnapshot: () => ensure().clearKlingEnvSnapshot(),
   toLocalFileUrl: (p: string) => ensure().toLocalFileUrl(p),
   readAsDataUrl: (fileOrPath: any) => ensure().readAsDataUrl(fileOrPath),
   ensureWorkDir: () => ensure().ensureWorkDir(),

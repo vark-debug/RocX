@@ -68,6 +68,12 @@ export interface ImageGenCreateRequest {
 // provider 操作结果（最小集，provider 内部可扩展）
 export interface VideoGenCreateResponse {
   taskId: string;
+  /**
+   * 本次实扣的灵感值（仅可灵有）。
+   * 可灵在**提交时即扣费**，该值随 generationId 一起返回，是真实扣费额，
+   * 不是本地价格表推算的估算值 —— 上报时独立成列，绝不折算成人民币。
+   */
+  creditsConsumed?: number;
   raw?: unknown;  // 透传原始响应，便于 UI 提取额外字段
 }
 

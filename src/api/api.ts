@@ -15,12 +15,15 @@ import { timelineCore } from "../core/timeline";
 import { importCore } from "../core/import";
 import { framesCore } from "../core/frames";
 import { captureVideoCore } from "../core/captureVideo";
+import { execKlingCli } from "../core/klingCli";
 import { getColorScheme, getUXPInfo, openURL } from "./uxp";
 import type {
   GenerationRecord,
+  KlingEnvSnapshot,
   ReportPurpose,
   PromptTemplate,
 } from "@shared/messages";
+import { providerNeedsReferenceUpload } from "@shared/messages";
 
 const hostName =
   uxp?.host?.name.toLowerCase().replace(/\s/g, "") || ("" as string);
@@ -75,11 +78,34 @@ export const api = {
 
   // 文件 IO / 上传
   async pickAndUploadReference(args: { kind: "video" | "audio" | "image"; providerId?: string }) {
-    const apiKey = await storage.getApiKey(args.providerId);
-    if (!apiKey) return { ok: false, error: "未配置 API Key" };
+    const refType =
+      args.kind === "video"
+        ? "reference_video"
+        : args.kind === "audio"
+          ? "reference_audio"
+          : "reference_image";
+
+    // 可灵走本机 CLI：素材由 CLI 自己上传到可灵，不经过 provider 的文件服务，
+    // 因此不查 key、也不调上传接口（调了必然报「未配置 API Key」）。
+    const needsUpload = providerNeedsReferenceUpload(args.providerId);
+    const apiKey = needsUpload ? (await storage.getApiKey(args.providerId)) || "" : "";
+    if (needsUpload && !apiKey) return { ok: false, error: "未配置 API Key" };
 
     const pick = await filesCore.pickAndValidate(args.kind);
     if (!pick.ok || !pick.file) return { ok: false, error: pick.error };
+
+    if (!needsUpload) {
+      // 只给本地路径：可灵走 CLI 的 --image / --video 本地路径直传（CLI 负责上传）
+      return {
+        ok: true,
+        reference: {
+          type: refType as any,
+          localPath: pick.nativePath,
+          fileName: pick.fileName,
+          sizeBytes: pick.sizeBytes,
+        },
+      };
+    }
 
     const uploaded = await uploadCore.uploadFile({
       apiKey,
@@ -91,12 +117,6 @@ export const api = {
       return { ok: false, error: uploaded.error };
     }
 
-    const refType =
-      args.kind === "video"
-        ? "reference_video"
-        : args.kind === "audio"
-        ? "reference_audio"
-        : "reference_image";
     return {
       ok: true,
       reference: {
@@ -247,6 +267,32 @@ export const api = {
   async testFeishuReport() {
     return await webhookCore.testReport();
   }, 
+
+  /**
+   * 执行可灵 CLI 命令（经 C++ Hybrid addon 拉起本机 kling CLI）。
+   * args 为 CLI 子命令 + 参数，如 ["who_am_i", "--quiet"]。
+   * priority=background 表示后台预热请求（素材预上传），可被前台请求插队。
+   */
+  async klingCliExec(
+    args: string[],
+    opts?: { timeoutMs?: number; priority?: "foreground" | "background" },
+  ) {
+    return await execKlingCli(args, opts);
+  },
+
+  /**
+   * 可灵环境自检快照（持久化）。
+   * 二次启动先读快照渲染 UI，再后台刷新 —— 省掉每次启动的 CLI 定位开销。
+   */
+  async getKlingEnvSnapshot() {
+    return await storage.getKlingEnvSnapshot();
+  },
+  async setKlingEnvSnapshot(snapshot: KlingEnvSnapshot) {
+    return await storage.setKlingEnvSnapshot(snapshot);
+  },
+  async clearKlingEnvSnapshot() {
+    return await storage.clearKlingEnvSnapshot();
+  },
 
   async toLocalFileUrl(localPath: string) {
     return filesCore.toLocalFileUrl(localPath);
