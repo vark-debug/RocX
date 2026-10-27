@@ -4,9 +4,11 @@
 >
 > **追溯补录（2026-10-25）**：v0.4.0 发布时未同步写入本文件，以下章节由 [GitHub Release](https://github.com/vark-debug/RocX/releases/tag/v0.4.0) 正文回填。
 
-## 未发布（拟 v0.5.0）
+## v0.5.0 (2026-10-27)
 
 新增**可灵（Kling）视频生成平台**，并首次引入「积分制」成本口径 —— 可灵按灵感值计费、提交即扣费，与其余三家的「人民币元估算」不是一套账。
+
+> **配套文档**：新增 [docs/agent-install.md](docs/agent-install.md) —— 面向 AI agent 的 macOS 自动化安装指南（UPIA 静默安装插件 / 可灵 CLI 安装 / OAuth 登录引导 / 体检脚本 / 故障速查）。
 
 ### 新增
 
@@ -114,8 +116,17 @@
 ### 兼容性
 
 - **现有 provider 的飞书上报数据零变化**：估价金额、purpose、上报时机均与改造前逐条一致（回归比对 294 条 payload + 260 条估价用例）
-- 可灵功能依赖 Adobe PR ≥ 26.2（C++ Hybrid addon）与本机已安装的 `kling` CLI；两者任一缺失时仅可灵功能不可用，其余功能不受影响
-- 插件 manifest 无变更
+- 可灵功能依赖 Adobe PR ≥ 26.2（C++ Hybrid addon 仅在 26.2+ 可加载，更早版本报 "Addon is not supported"）与本机已安装并已登录的 `kling` CLI；两者任一缺失时仅可灵功能不可用，其余功能不受影响
+- 可灵**不需要 API Key**（走 CLI 登录态），其余三家仍按原有 Key 配置流程
+- **manifest 有变更**：新增可灵 CDN 域名白名单（`network.domains` 与 `webview.domains` 同步）—— manifest 不热更新，**升级后必须重新加载插件**
+- 未配置 MiniMax API Key 的新用户启动时默认切到可灵（可直接用，无需先配 Key）；已配 Key 的老用户默认平台不变
+
+### 已知限制
+
+- **轮询仍为插件侧逐任务拉起**：可灵每个在飞任务每 5s 拉起一个独立 node 进程（单进程峰值 RSS 实测 `query_tasks` 312MB / `who_am_i` 352MB）。已用「CLI 并发上限 3 + 在飞任务上限 3」双重限流把峰值从 2.2GB 压下来，但改用 CLI 原生 `query_tasks --poll`（单进程内部轮询，内存约为现方案的 1/3.4）尚未做 —— 涉及轮询状态机重构，留待后续版本
+- **未配置 API Key 时默认切可灵**：依赖本机已装并登录 `kling` CLI；两者都没有时用户仍需手动在平台栏切换
+- **可灵素材直链 TTL 6 小时**：过期后回退本地路径由 CLI 重传（宁可慢，不可错）
+- **本仓库 `public-hybrid/` 当前只有 arm64 产物**：Intel Mac / Windows 需在对应平台执行 `npm run native:build` 重新产出原生 addon
 
 ## v0.4.1 (2026-10-15)
 
