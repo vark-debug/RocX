@@ -27,26 +27,36 @@ const LAUNCHER_FILES = [
  */
 export function copyLauncherAssets(opts = {}) {
     const { mode } = opts;
+    const copyAll = () => {
+        const srcDir = path.join(repoRoot, 'public-zip');
+        const distDir = path.join(repoRoot, 'dist');
+        if (!fs.existsSync(srcDir) || !fs.existsSync(distDir)) return;
+        for (const { src, dst, mode: fileMode } of LAUNCHER_FILES) {
+            const srcPath = path.join(srcDir, src);
+            if (!fs.existsSync(srcPath)) continue;
+            const dstPath = path.join(distDir, dst);
+            fs.copyFileSync(srcPath, dstPath);
+            // copyFileSync 会保留源文件 mode，但源 mode 可能是 644（Windows 上传的 zip）
+            try {
+                fs.chmodSync(dstPath, fileMode);
+            } catch (e) {
+                console.warn(`[rocx] chmod ${mode} 失败: ${dstPath}`, e);
+            }
+            console.log(`[rocx] copied ${src} -> dist/${dst} (mode ${fileMode.toString(8)})`);
+        }
+    };
     return {
         name: 'rocx-copy-launcher-assets',
-        apply: 'build',
+        // 不设 apply:'build' —— dev 模式(vite build --watch)也要拷贝。
+        // 否则 dev 下 dist/ 里没有 launcher 脚本，UXP 探测失败，
+        // 「抓帧→PS」会整级跳过 launcher 脚本降级。
+        buildStart() {
+            // vite build --watch 下每次重建都会先清空 dist,
+            // 在 buildStart(清空之前)拷一次,保证首轮也有。
+            if (mode === 'dev') copyAll();
+        },
         closeBundle() {
-            const srcDir = path.join(repoRoot, 'public-zip');
-            const distDir = path.join(repoRoot, 'dist');
-            if (!fs.existsSync(srcDir) || !fs.existsSync(distDir)) return;
-            for (const { src, dst, mode: fileMode } of LAUNCHER_FILES) {
-                const srcPath = path.join(srcDir, src);
-                if (!fs.existsSync(srcPath)) continue;
-                const dstPath = path.join(distDir, dst);
-                fs.copyFileSync(srcPath, dstPath);
-                // copyFileSync 会保留源文件 mode，但源 mode 可能是 644（Windows 上传的 zip）
-                try {
-                    fs.chmodSync(dstPath, fileMode);
-                } catch (e) {
-                    console.warn(`[rocx] chmod ${mode} 失败: ${dstPath}`, e);
-                }
-                console.log(`[rocx] copied ${src} -> dist/${dst} (mode ${fileMode.toString(8)})`);
-            }
+            copyAll();
         },
     };
 }

@@ -365,6 +365,13 @@ export function useReferences(opts: {
           "[webview][ps-launch] ❌ 拉起 PS 失败:",
           rs.error,
         );
+        // 明确告知用户失败原因（尤其"未安装 Photoshop"），
+        // 否则用户只看到图片被某个无关应用打开，完全不知道发生了什么。
+        if (/not found|is photoshop installed/i.test(rs.error || "")) {
+          opts.showToast("未检测到 Photoshop 安装，请先安装 Photoshop 后重试");
+        } else {
+          opts.showToast(`拉起 Photoshop 失败: ${rs.error || "未知错误"}`);
+        }
       } else {
         const via =
           rs.source === "native"
