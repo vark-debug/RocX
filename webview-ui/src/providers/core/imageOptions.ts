@@ -17,9 +17,9 @@ export interface ImageParamConstraints {
   resolutions: string[];
   /** aspect_ratio 值域（可能含 "auto"） */
   ratios: string[];
-  /** 服务端声明的默认 img_resolution（切平台时优先用它，而不是值域首项） */
+  /** 平台默认的 img_resolution（切平台时优先用它，而不是值域首项） */
   defaultResolution?: string;
-  /** 服务端声明的默认 aspect_ratio */
+  /** 平台默认的 aspect_ratio */
   defaultRatio?: string;
 }
 
@@ -32,7 +32,7 @@ export const DEFAULT_IMAGE_RATIO_OPTIONS = ["1:1", "4:3", "3:4", "16:9", "9:16"]
 /**
  * 平台的默认宽高比（用户没手动选过时用它）。
  *
- * - 可灵：服务端声明的 `aspect_ratio` 默认值 —— 实测默认模型
+ * - 可灵：服务端声明的 `aspect_ratio` **平台默认值** —— 实测默认模型
  *   `kling-image-v3_0_omni` 声明的是 **"auto"**（模型按提示词自选比例）
  * - 其余平台：本地默认集首项（"1:1"）
  */

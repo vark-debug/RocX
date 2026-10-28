@@ -239,8 +239,9 @@ const imageSize = ref<string>("智能");
 /**
  * 用户是否手动选过宽高比 / 尺寸档位。
  *
- * false → 取当前平台（模型）的**声明默认值**：可灵是服务端声明的
- *   aspect_ratio="auto" + img_resolution="2k"，其余平台是 "1:1" + "智能"。
+ * false → 取当前平台的**声明默认值**：可灵是服务端声明的
+ *   aspect_ratio="auto" + img_resolution="2k"（平台默认值，各模型一致），
+ *   其余平台是 "1:1" + "智能"。
  * true  → 用户自己选的值，切平台/切模型时保留（只做值域收敛）。
  */
 const imageRatioTouched = ref(false);
@@ -368,8 +369,9 @@ const imageHasApiKey = ref(false);
  * 其余平台 "智能"/"1K"/"2K" + 固定 5 比例），所以任何时候改了平台或模型
  * 都要重新收敛一次，否则提交时会下发非法参数。
  *
- * 用户没手动选过 → 直接取**当前平台（模型）的声明默认值**：
- * 可灵是服务端声明的 aspect_ratio="auto" + img_resolution="2k"，
+ * 用户没手动选过 → 直接取**当前平台的声明默认值**：
+ * 可灵是服务端声明的 aspect_ratio="auto" + img_resolution="2k"
+ * （平台默认值 —— 切模型也一致，不会从「自动」跳成固定比例），
  * 其余平台是 "1:1" + "智能"。
  * 用户手动选过 → 保留用户的选择，只在值域非法时收敛。
  */

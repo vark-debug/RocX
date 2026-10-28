@@ -346,9 +346,17 @@ export interface KlingImageParamSpec {
   supportsReference: boolean;
   /** 参考图槽位声明（image_1..image_10 或 v2_1 的 subject_image_N/scene_image/style_image） */
   inputs: KlingInputSpec[];
-  /** 服务端声明的默认 img_resolution（实测多数模型是 "2k"） */
+  /**
+   * 默认 img_resolution（"2k"）。
+   *
+   * 取**平台默认值**（服务端默认模型的声明）—— 该模型不支持时退回自己的声明默认。
+   */
   defaultResolution?: string;
-  /** 服务端声明的默认 aspect_ratio（实测 v3_0_omni 是 "auto"） */
+  /**
+   * 默认 aspect_ratio（"auto"）。
+   *
+   * 取**平台默认值**（服务端默认模型的声明）—— 该模型不支持时退回自己的声明默认。
+   */
   defaultRatio?: string;
 }
 
@@ -397,7 +405,7 @@ export function buildKlingImageParamSpecs(
         const values = (arg.allowedValues ?? []).map((v) => String(v));
         if (arg.name === "img_resolution") {
           for (const v of values) cur.resolutions.add(v);
-          // 首个声明的默认值即 UI 初始值（text_to_image 优先，它是主入口）
+          // 首个声明的默认值即该模型自己的声明默认（text_to_image 优先，它是主入口）
           if (cur.defaultResolution === undefined && arg.default != null) {
             cur.defaultResolution = String(arg.default);
           }
@@ -418,18 +426,52 @@ export function buildKlingImageParamSpecs(
     }
   }
 
+  /**
+   * 平台默认值 = **服务端默认模型**（text_to_image.defaultModel）的声明。
+   *
+   * ⚠ 为什么不用「每个模型各自的声明默认」：
+   *   服务端给各模型声明的 aspect_ratio 默认值并不一致（实测 text_to_image 下
+   *   o3 声明 "auto"、o1 / v3_0 声明 "1:1"、v2_1 声明 "3:4"）。
+   *   按各自声明取默认值 → 切模型时宽高比会跳变（auto → 1:1 → 3:4），
+   *   用户看到的「平台默认值」随模型漂移。
+   *   默认模型才是服务端口径里的「默认」，它的声明就是平台默认值。
+   *
+   * 模型不支持平台默认值时（如 v2_1 两个工具都不声明 "auto"）
+   * → 退回该模型自己的声明默认。
+   */
+  const platformDefaults = merged.get(pickKlingImageDefaultModel(catalog));
+
   return Array.from(merged.entries()).map(([model, m]) => ({
     model,
     alias: m.alias,
     description: m.description,
     resolutions: Array.from(m.resolutions),
-    ratios: Array.from(m.ratios),
+    ratios: orderRatiosAutoFirst(Array.from(m.ratios)),
     counts: Array.from(m.counts),
     supportsReference: m.supportsReference,
     inputs: m.inputs,
-    defaultResolution: m.defaultResolution,
-    defaultRatio: m.defaultRatio,
+    defaultResolution:
+      platformDefaults?.defaultResolution &&
+      m.resolutions.has(platformDefaults.defaultResolution)
+        ? platformDefaults.defaultResolution
+        : m.defaultResolution,
+    defaultRatio:
+      platformDefaults?.defaultRatio && m.ratios.has(platformDefaults.defaultRatio)
+        ? platformDefaults.defaultRatio
+        : m.defaultRatio,
   }));
+}
+
+/**
+ * 把 "auto" 排到宽高比值域首位。
+ *
+ * 并集里 "auto" 只出现在 image_to_image 的声明里 → 直接展开会排在末尾，
+ * 而默认模型（o3）的 "auto" 恰好在首位。切模型时同一个选项在列表里的
+ * 位置会来回跳，把它固定到首位，列表顺序就与模型无关了。
+ */
+function orderRatiosAutoFirst(ratios: string[]): string[] {
+  if (!ratios.includes("auto")) return ratios;
+  return ["auto", ...ratios.filter((r) => r !== "auto")];
 }
 
 /** 图片工具的参考图槽位上限（取声明里的槽位数） */
