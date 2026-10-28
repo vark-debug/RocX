@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from "vue";
+import { ref, computed, nextTick, onMounted, onUnmounted } from "vue";
 import type { ModelDescriptor } from "../providers/core/types";
 import { describeRatio } from "../providers/runninghub/wireFormat";
 import {
@@ -91,6 +91,60 @@ function toggleParamsPopover() {
   if (paramsPopoverOpen.value) modelPopoverOpen.value = false;
 }
 
+/**
+ * 点提示词输入框 → 收起模型/参数浮层。
+ *
+ * 浮层是向上展开的，正好压在提示词框上方；不收起来的话用户想点输入框
+ * 还得先点空白处把浮层关掉。
+ */
+function closeParamPopovers() {
+  modelPopoverOpen.value = false;
+  paramsPopoverOpen.value = false;
+}
+
+/**
+ * 点浮层外部 → 收起浮层。
+ *
+ * ⚠ 浮层向上展开，**正好盖住提示词输入框** —— 用户"点提示词框"时
+ *   实际点到的是浮层，不是输入框。所以除了收起浮层，还要看点击位置
+ *   是否落在输入框上，命中就把焦点还回去（用户想点完直接打字）。
+ *
+ * 不收起的两种情况：
+ * - 点在切换按钮上 → 交给按钮自己的 toggle
+ * - 点在选项上（radio-item）→ 用户还在选，不打断
+ */
+function onDocClick(e: MouseEvent) {
+  if (!modelPopoverOpen.value && !paramsPopoverOpen.value) return;
+  const t = e.target as HTMLElement | null;
+  if (t?.closest?.(".param-toggle")) return;
+  if (t?.closest?.(".radio-item")) return;
+  closeParamPopovers();
+  focusTextareaAt(e);
+}
+
+/** 点击位置落在提示词框上 → 把焦点还给输入框（用户可以接着打字） */
+function focusTextareaAt(e: MouseEvent) {
+  const ta = promptTextarea.value;
+  if (!ta) return;
+  const r = ta.getBoundingClientRect();
+  if (
+    e.clientX >= r.left &&
+    e.clientX <= r.right &&
+    e.clientY >= r.top &&
+    e.clientY <= r.bottom
+  ) {
+    ta.focus();
+  }
+}
+
+/** 宽高比展示文案（"auto" → "自动"，其余原样） */
+function ratioLabel(r: string): string {
+  return r === "auto" ? "自动" : r;
+}
+
+onMounted(() => document.addEventListener("click", onDocClick, true));
+onUnmounted(() => document.removeEventListener("click", onDocClick, true));
+
 function pickModel(modelId: string) {
   emit("update:model", modelId);
   modelPopoverOpen.value = false;
@@ -113,8 +167,8 @@ const paramsSummary = computed(() => {
     return `${describeRatio(props.seqSize.width, props.seqSize.height)}·智能 ${props.seqSize.width}×${props.seqSize.height}`;
   }
   // 服务端没声明分辨率参数（模型自己决定）→ 只展示比例
-  if (!props.size) return props.ratio;
-  return `${props.ratio}·${props.size}`;
+  if (!props.size) return ratioLabel(props.ratio);
+  return `${ratioLabel(props.ratio)}·${props.size}`;
 });
 
 const canSubmit = computed(() => !!props.prompt.trim());
@@ -161,6 +215,7 @@ function onPromptInput(e: Event) {
         @input="onPromptInput"
         @keydown="tpl.onKeydown"
         @blur="tpl.close"
+        @click="closeParamPopovers"
         placeholder="描述你想生成的图片... 或按 / 选择提示词模板"
         rows="2"
       ></textarea>
@@ -259,7 +314,7 @@ function onPromptInput(e: Event) {
                 :disabled="size === '智能'"
                 @change="emit('update:ratio', r)"
               />
-              <span>{{ r }}</span>
+              <span>{{ ratioLabel(r) }}</span>
             </label>
           </div>
         </div>

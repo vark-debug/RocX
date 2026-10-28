@@ -8,6 +8,8 @@ import { ratioToSize, clampToApiMax } from "./providers/runninghub/wireFormat";
 import {
   coerceImageRatio,
   coerceImageSize,
+  defaultImageRatio,
+  defaultImageSize,
   imageRatioOptions,
   imageSizeOptions,
 } from "./providers/core/imageOptions";
@@ -44,7 +46,6 @@ import {
   bootstrapKlingEnv,
   getKlingDefaultModel,
   getKlingImageDefaultModel,
-  getKlingCatalogSync,
   klingImageModels,
 } from "./providers/kling";
 import { KLING_PROVIDER_ID } from "@shared/messages";
@@ -235,6 +236,15 @@ const imageModel = ref("seedream-v5-pro");
 // 其余平台是 "智能"/"1K"/"2K" + 固定 5 个比例）→ 用 string 而非字面量联合
 const imageRatio = ref<string>("1:1");
 const imageSize = ref<string>("智能");
+/**
+ * 用户是否手动选过宽高比 / 尺寸档位。
+ *
+ * false → 取当前平台（模型）的**声明默认值**：可灵是服务端声明的
+ *   aspect_ratio="auto" + img_resolution="2k"，其余平台是 "1:1" + "智能"。
+ * true  → 用户自己选的值，切平台/切模型时保留（只做值域收敛）。
+ */
+const imageRatioTouched = ref(false);
+const imageSizeTouched = ref(false);
 /** 活动序列分辨率（智能档展示 / 提交兜底用；切到图片生成模式时刷新；超 API 上限的已等比钳制） */
 const imageSeqSize = ref<{ width: number; height: number } | null>(null);
 async function refreshImageSeqSize() {
@@ -294,12 +304,22 @@ function resolveImageProviderId(): string {
   return currentImageProviderId.value;
 }
 
+/** RunningHub / 火山方舟 是否已配 API Key（决定图片模式的默认平台） */
+const runningHubKeyPresent = ref(false);
+const arkKeyPresent = ref(false);
+
 /** 图片平台的切换选项（id + 显示名） */
 const imageProviderOptions = computed(() => {
   const opts = imageProviderList.value.map((p) => ({
     id: p.providerId,
     label: p.displayName,
   }));
+  // 两个 HTTP 平台都没 key → 可灵排前面（可直接用的平台优先），与视频侧同策略
+  if (!runningHubKeyPresent.value && !arkKeyPresent.value) {
+    opts.sort((a, b) =>
+      a.id === KLING_PROVIDER_ID ? -1 : b.id === KLING_PROVIDER_ID ? 1 : 0,
+    );
+  }
   return opts;
 });
 
@@ -347,18 +367,36 @@ const imageHasApiKey = ref(false);
  * 值域随**平台**和**模型**而变（可灵 "1k"/"2k"/"4k" + "auto"，
  * 其余平台 "智能"/"1K"/"2K" + 固定 5 比例），所以任何时候改了平台或模型
  * 都要重新收敛一次，否则提交时会下发非法参数。
+ *
+ * 用户没手动选过 → 直接取**当前平台（模型）的声明默认值**：
+ * 可灵是服务端声明的 aspect_ratio="auto" + img_resolution="2k"，
+ * 其余平台是 "1:1" + "智能"。
+ * 用户手动选过 → 保留用户的选择，只在值域非法时收敛。
  */
 function normalizeImageParams(): void {
-  imageSize.value = coerceImageSize(
-    imageSize.value,
-    imageSizeOptions(imageConstraints.value, imageSupportsSmartSize.value),
-    imageConstraints.value?.defaultResolution,
-  );
-  imageRatio.value = coerceImageRatio(
-    imageRatio.value,
-    imageRatioOptions(imageConstraints.value),
-    imageConstraints.value?.defaultRatio,
-  );
+  const c = imageConstraints.value;
+  imageSize.value = imageSizeTouched.value
+    ? coerceImageSize(
+        imageSize.value,
+        imageSizeOptions(c, imageSupportsSmartSize.value),
+        c?.defaultResolution,
+      )
+    : defaultImageSize(c, imageSupportsSmartSize.value);
+  imageRatio.value = imageRatioTouched.value
+    ? coerceImageRatio(imageRatio.value, imageRatioOptions(c), c?.defaultRatio)
+    : defaultImageRatio(c);
+}
+
+/** 用户手动选了宽高比 → 后续切平台/切模型时保留这个选择 */
+function onImageRatioPick(v: string): void {
+  imageRatio.value = v;
+  imageRatioTouched.value = true;
+}
+
+/** 用户手动选了尺寸档位 → 后续切平台/切模型时保留这个选择 */
+function onImageSizePick(v: string): void {
+  imageSize.value = v;
+  imageSizeTouched.value = true;
 }
 
 /**
@@ -528,7 +566,11 @@ const recordEditApi = useRecordEdit({
       await switchImageProvider(recProvider);
     }
     if (rec.params.model) imageModel.value = rec.params.model;
-    if (rec.params.ratio) imageRatio.value = rec.params.ratio as string;
+    if (rec.params.ratio) {
+      imageRatio.value = rec.params.ratio as string;
+      // 回填的是记录里的原值 → 视为用户选定，后续切平台不再被默认值覆盖
+      imageRatioTouched.value = true;
+    }
     // params.resolution 现在存的是计价档位（按像素总数算出），不一定等于 UI 档位：
     // width/height 与某个预设映射吻合 → 回填该档位；否则视为智能档（序列分辨率）
     const w = rec.imageParams?.width;
@@ -546,6 +588,8 @@ const recordEditApi = useRecordEdit({
       // 但 params.resolution 存的就是服务端档位（"1k"/"2k"/"4k"）→ 直接回填
       imageSize.value = rec.params.resolution;
     }
+    // 尺寸同样是回填原值 → 视为用户选定
+    imageSizeTouched.value = true;
     // 图生图参考回填（本地 localPath 仍在，重新提交时按 Base64 直传重读）
     references.value = rec.references;
   },
@@ -686,22 +730,21 @@ onMounted(async () => {
       model.value = pickDefaultModelFor(currentProviderId.value, models);
     }
   }
-  // 图片平台默认（平台是显式状态，不再按 modelId 反查）：
+  // 图片平台默认（平台是显式状态，不再按 modelId 反查），与视频侧同策略：
   // - 有 key 的平台优先（RunningHub / 火山方舟 谁有 key 用谁）
-  // - 两个都没 key → 优先可灵（走 CLI 登录态，不需要 key）。
-  //   只在清单已经加载过时才切（视频侧没配 MiniMax key 时会顺带加载），
-  //   否则不为了图片多跑一次 CLI —— 用户可以在平台栏里手动切。
+  // - 两个都没 key → 默认可灵（走 CLI 登录态，不需要 key）
   try {
     const [rhKey, arkKey] = await Promise.all([
       bridge.getApiKey("runninghub"),
       bridge.getApiKey("ark"),
     ]);
-    const soleProvider =
-      rhKey && !arkKey ? "runninghub" : !rhKey && arkKey ? "ark" : null;
-    if (soleProvider) {
-      await switchImageProvider(soleProvider);
-    } else if (!rhKey && !arkKey && getKlingCatalogSync()) {
+    runningHubKeyPresent.value = !!rhKey;
+    arkKeyPresent.value = !!arkKey;
+    if (!rhKey && !arkKey) {
+      // 没 key → 默认可灵。清单要现拉（who_am_i），切过去先加载再取默认模型
       await switchImageProvider(KLING_PROVIDER_ID);
+    } else if (!rhKey && arkKey) {
+      await switchImageProvider("ark");
     }
     // key 状态（切换过平台的由 switchImageProvider 负责，这里兜底当前平台）
     if (currentImageProviderId.value === KLING_PROVIDER_ID) {
@@ -738,6 +781,12 @@ function onSettingsSave(key: string, providerId: string) {
   // MiniMax 的 key 状态变化会影响平台栏排序（没 key 时可灵排前面）
   if (providerId === DEFAULT_PROVIDER_ID) {
     minimaxKeyPresent.value = !!key.trim();
+  }
+  // 图片平台的 key 状态变化会影响平台栏排序（都没 key 时可灵排前面）
+  if (providerId === "runninghub") {
+    runningHubKeyPresent.value = !!key.trim();
+  } else if (providerId === "ark") {
+    arkKeyPresent.value = !!key.trim();
   }
   // 当前图片平台的 key 状态变化 → 提交按钮文案（"请配置 API Key"）
   if (providerId === currentImageProviderId.value) {
@@ -894,8 +943,8 @@ async function refreshProject() {
         <ImagePromptInput
           v-model:prompt="imagePrompt"
           v-model:model="imageModel"
-          v-model:ratio="imageRatio"
-          v-model:size="imageSize"
+          :ratio="imageRatio"
+          :size="imageSize"
           :models="imageModels"
           :seq-size="imageSeqSize"
           :providers="imageProviderOptions"
@@ -905,6 +954,8 @@ async function refreshProject() {
           :needs-api-key="imageNeedsApiKey"
           :has-api-key="imageHasApiKey"
           :supports-smart-size="imageSupportsSmartSize"
+          @update:ratio="onImageRatioPick"
+          @update:size="onImageSizePick"
           @update:providerId="switchImageProvider"
           @generate="onImageGenerate"
         />

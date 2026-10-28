@@ -30,20 +30,61 @@ export const DEFAULT_IMAGE_SIZE_OPTIONS = ["智能", "1K", "2K"];
 export const DEFAULT_IMAGE_RATIO_OPTIONS = ["1:1", "4:3", "3:4", "16:9", "9:16"];
 
 /**
+ * 平台的默认宽高比（用户没手动选过时用它）。
+ *
+ * - 可灵：服务端声明的 `aspect_ratio` 默认值 —— 实测默认模型
+ *   `kling-image-v3_0_omni` 声明的是 **"auto"**（模型按提示词自选比例）
+ * - 其余平台：本地默认集首项（"1:1"）
+ */
+export function defaultImageRatio(
+  constraints?: ImageParamConstraints | null,
+): string {
+  if (constraints) {
+    if (constraints.defaultRatio) return constraints.defaultRatio;
+    // 服务端没给默认值 → 用它声明的值域首项
+    return constraints.ratios[0] ?? DEFAULT_IMAGE_RATIO_OPTIONS[0];
+  }
+  return DEFAULT_IMAGE_RATIO_OPTIONS[0];
+}
+
+/**
+ * 平台的默认尺寸档位（用户没手动选过时用它）。
+ *
+ * - 可灵：服务端声明的 `img_resolution` 默认值 —— 实测默认模型
+ *   `kling-image-v3_0_omni` 声明的是 **"2k"**
+ * - 其余平台："智能"（跟随活动序列分辨率）
+ */
+export function defaultImageSize(
+  constraints?: ImageParamConstraints | null,
+  supportsSmartSize = true,
+): string {
+  if (constraints) {
+    if (constraints.defaultResolution) return constraints.defaultResolution;
+    // 服务端声明了参数但没给默认值 → 值域首项；压根没声明该参数 → 空串
+    // （空串 = 分辨率由服务端决定，UI 不出尺寸选择器）
+    return constraints.resolutions[0] ?? "";
+  }
+  return supportsSmartSize ? DEFAULT_IMAGE_SIZE_OPTIONS[0] : "";
+}
+
+/**
  * 尺寸档位选项。
  *
  * - 有服务端声明 → 用声明的值域（可灵："1k"/"2k"/"4k"；模型没声明该参数 → 空数组，
  *   表示「分辨率由服务端决定」，UI 不出尺寸选择器）
  * - 无声明 → 本地默认值；不支持"智能"档的平台去掉"智能"
+ *
+ * ⚠ 不支持"智能"档却拿不到服务端声明（可灵清单还没拉到）→ 返回空数组：
+ *   可灵用的是 "1k"/"2k"/"4k"（小写），套别的平台的 "1K"/"2K" 是误导，
+ *   与其显示一排不能用的档位，不如这一组先不出。
  */
 export function imageSizeOptions(
   constraints?: ImageParamConstraints | null,
   supportsSmartSize = true,
 ): string[] {
   if (constraints) return constraints.resolutions;
-  return supportsSmartSize
-    ? [...DEFAULT_IMAGE_SIZE_OPTIONS]
-    : DEFAULT_IMAGE_SIZE_OPTIONS.filter((s) => s !== "智能");
+  if (!supportsSmartSize) return [];
+  return [...DEFAULT_IMAGE_SIZE_OPTIONS];
 }
 
 /** 宽高比选项（有服务端声明 → 用声明的值域） */
