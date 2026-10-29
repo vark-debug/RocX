@@ -12,7 +12,7 @@
  * 任何异常 / 失败均 console.warn,不污染 UI;返回 `{ok, source}` 供诊断日志。
  */
 import { uxp } from "../globals";
-import { getFs } from "./pathUtils";
+import { getFs, pathToFileUrl } from "./pathUtils";
 import { getPluginDataFolder } from "./storage";
 
 export const psLauncherCore = {
@@ -102,7 +102,14 @@ export const psLauncherCore = {
       const launcherPath = `${pluginRoot.replace(/[\/\\]+$/, "")}${sep}${launcherName}`;
       console.log(`[files][ps-launch] launcher 脚本路径: ${launcherPath}`);
       // 探测 launcher 是否在 plugin root 内,失败给出清晰错误
-      const probeUrl = `file:///${pluginRoot.replace(/\\/g, "/").replace(/^\//, "")}/${launcherName}`;
+      //
+      // 必须手拼 URL 而不是用 pathToFileUrl:
+      //   - UXP 的 file:// URL 要求用正斜杠,Windows 的反斜杠路径要转成 "D:/RocX/dist/..."
+      //   - pathToFileUrl 只剥 "\\?\" 前缀,不做反斜杠转换,直接用会得到
+      //     "file:///D:\RocX\dist\launcher.cmd" 这种 UXP 解析不了的 URL
+      const probeUrl = pathToFileUrl(
+        launcherPath.replace(/\\/g, "/"),
+      );
       try {
         await uxpFs.getEntryWithUrl(probeUrl);
       } catch {
@@ -130,6 +137,8 @@ export const psLauncherCore = {
     console.log(`[files][ps-launch] 开始拉起 PS, localPath=${localPath}`);
 
     // 1) C++ Hybrid Plugin
+    // 记下 C++ 侧的失败原因 —— 后面用来判断该不该继续降级。
+    let nativeError = "";
     try {
       // UXP Hybrid Plugin:`require("name.uxpaddon")` 返回 Promise,必须 await
       const addon: any = await (require as any)("RocXBridge.uxpaddon");
@@ -140,6 +149,7 @@ export const psLauncherCore = {
           return { ok: true, source: "native" };
         }
         if (r && r.error) {
+          nativeError = r.error;
           console.warn("[files] hybrid addon returned error, fallback to launcher:", r.error);
         }
       } else {
@@ -147,6 +157,7 @@ export const psLauncherCore = {
       }
     } catch (e: any) {
       // MODULE_NOT_FOUND / Addon is not supported / PR 版本过低 / uxpaddon 缺失
+      nativeError = String(e?.message || e);
       console.warn(
         "[files][ps-launch] C++ Hybrid 不可用, 降级 launcher 脚本:",
         e?.message || e,
@@ -166,6 +177,23 @@ export const psLauncherCore = {
     }
 
     // 3) 系统兜底
+    //
+    // 重要:系统关联兜底会用「图片的默认打开程序」打开,而不是 Photoshop。
+    // 如果 C++ 已经明确判定「这台机器没装 Photoshop」,再走这级只会拉起
+    // 照片/WPS 预览这类无关应用,反而让用户更困惑(曾经表现为"打开了应用文件夹")。
+    // 这时直接返回失败,把原因如实报给上层。
+    if (/not found|is photoshop installed/i.test(nativeError)) {
+      console.warn(
+        "[files][ps-launch] 判定为未安装 Photoshop,跳过系统关联兜底:",
+        nativeError,
+      );
+      return {
+        ok: false,
+        source: "fallback",
+        error: nativeError,
+      };
+    }
+
     const f = await this.openWithPhotoshop(localPath);
     console.log(
       `[files][ps-launch] ${f.ok ? "✅" : "❌"} 命中路径: 系统关联兜底 (shell.openPath)${f.error ? `, error=${f.error}` : ""}`,

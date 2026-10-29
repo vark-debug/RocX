@@ -18,7 +18,7 @@ namespace {
 /** stdout/stderr 各自的上限(字节) */
 constexpr size_t kMaxOutputBytes = 256 * 1024;
 
-std::string wideFromUtf8(const char* utf8) {
+std::wstring wideFromUtf8(const char* utf8) {
     if (utf8 == nullptr || *utf8 == '\0') {
         return std::wstring();
     }
@@ -26,8 +26,10 @@ std::string wideFromUtf8(const char* utf8) {
     if (needed <= 1) {
         return std::wstring();
     }
-    std::wstring wide(static_cast<size_t>(needed - 1), L'\0');
+    // -1 模式写入会带上结尾的 '\0',所以要按 needed(含终止符)分配再 pop_back
+    std::wstring wide(static_cast<size_t>(needed), L'\0');
     ::MultiByteToWideChar(CP_UTF8, 0, utf8, -1, &wide[0], needed);
+    wide.pop_back();
     return wide;
 }
 
@@ -39,8 +41,9 @@ std::string utf8FromWide(const std::wstring& wide) {
     if (needed <= 1) {
         return std::string();
     }
-    std::string utf8(static_cast<size_t>(needed - 1), '\0');
+    std::string utf8(static_cast<size_t>(needed), '\0');
     ::WideCharToMultiByte(CP_UTF8, 0, wide.c_str(), -1, &utf8[0], needed, nullptr, nullptr);
+    utf8.pop_back();
     return utf8;
 }
 
@@ -48,12 +51,23 @@ std::string utf8FromWide(const std::wstring& wide) {
  * 给可执行文件路径补上 .cmd / .bat 后缀查找。
  * npm 全局安装的 kling 在 Windows 上是 kling.cmd,CreateProcessW 不能直接执行批处理,
  * 需要用 cmd.exe /c 包裹(见下 BuildCommandLine)。
+ *
+ * 注意:必须搜 PATH —— 传入的 exe 可能是裸命令名(如 "cmd.exe"、"kling"),
+ * GetFileAttributesW 只按当前工作目录解析,而 PR 拉起的进程 CWD 不可控,
+ * 直接判定"找不到"会让可灵 CLI 误报成"未安装"。
  */
 bool ResolveExecutable(const std::wstring& exe, std::wstring* resolved) {
+    if (exe.empty()) {
+        return false;
+    }
+
+    // 1) 绝对/相对路径直接命中
     if (::GetFileAttributesW(exe.c_str()) != INVALID_FILE_ATTRIBUTES) {
         *resolved = exe;
         return true;
     }
+
+    // 2) 补后缀后再试(同目录下的 foo.cmd / foo.bat / foo.exe)
     const wchar_t* exts[] = {L".cmd", L".bat", L".exe", L""};
     for (const wchar_t* ext : exts) {
         std::wstring candidate = exe + ext;
@@ -62,6 +76,29 @@ bool ResolveExecutable(const std::wstring& exe, std::wstring* resolved) {
             return true;
         }
     }
+
+    // 3) 搜 PATH。SearchPathW 会依次尝试传入的扩展名和 PATHEXT,
+    //    裸命令名("cmd.exe" / "kling")靠这步才能找到。
+    wchar_t found[MAX_PATH * 2] = { 0 };
+    DWORD n = ::SearchPathW(nullptr, exe.c_str(), nullptr, MAX_PATH * 2, found, nullptr);
+    if (n > 0 && n < MAX_PATH * 2) {
+        *resolved = found;
+        return true;
+    }
+
+    // 4) 裸命令名 + 常见扩展名再搜一次(如 "kling" -> kling.cmd)
+    if (exe.find(L'.') == std::wstring::npos) {
+        for (const wchar_t* ext : exts) {
+            if (ext[0] == L'\0') continue;
+            std::wstring named = exe + ext;
+            n = ::SearchPathW(nullptr, named.c_str(), nullptr, MAX_PATH * 2, found, nullptr);
+            if (n > 0 && n < MAX_PATH * 2) {
+                *resolved = found;
+                return true;
+            }
+        }
+    }
+
     return false;
 }
 
@@ -153,6 +190,27 @@ bool DrainPipe(HANDLE h, std::string* buf, size_t limit, bool* truncated) {
     }
 }
 
+/**
+ * 取 UTF-8 序列在起始字节处声明的字符长度。
+ * 0x00-0x7F 为 1 字节 ASCII;0xC0-0xDF 为 2 字节;0xE0-0xEF 为 3 字节;0xF0-0xF7 为 4 字节。
+ * 与 macOS 版 RocXBridgeCommand.mm 的 Utf8CharLength 保持一致。
+ */
+size_t Utf8CharLength(unsigned char lead) {
+    if (lead < 0x80) {
+        return 1;  // ASCII
+    }
+    if ((lead & 0xE0) == 0xC0) {
+        return 2;
+    }
+    if ((lead & 0xF0) == 0xE0) {
+        return 3;
+    }
+    if ((lead & 0xF8) == 0xF0) {
+        return 4;
+    }
+    return 1;  // 非法起始字节,按单字节处理
+}
+
 /** 按完整 UTF-8 字符边界截断 */
 void TrimToUtf8Boundary(std::string* s) {
     if (s->empty()) {
@@ -165,8 +223,10 @@ void TrimToUtf8Boundary(std::string* s) {
             ++i;
             continue;
         }
-        size_t expected = (c & 0xE0) == 0xC0 ? 1u : ((c & 0xF0) == 0xE0 ? 2u : 3u);
-        if (i < expected) {
+        // i 是已扫描的续字节数,起始字节本身还要占 expected 字节,
+        // 整个字符共 expected 字节,已保留的完整字符需要砍掉 i 个续字节。
+        size_t expected = Utf8CharLength(c);
+        if (i + 1 < expected) {
             s->resize(s->size() - i);
         }
         return;
@@ -259,10 +319,8 @@ CommandResult RunCommandForPlatform(const std::string& exe,
         return result;
     }
 
-    // 管道读端非阻塞,配合超时轮询
-    DWORD readTimeout = 50;
-    ::SetNamedPipeHandleState(outRead, nullptr, nullptr, &readTimeout, nullptr);
-    ::SetNamedPipeHandleState(errRead, nullptr, nullptr, &readTimeout, nullptr);
+    // 管道读端由下面的 PeekNamedPipe 轮询实现超时,无需 SetNamedPipeHandleState
+    // (该 API 只对命名管道有效,CreatePipe 创建的是匿名管道)
 
     bool outOpen = true;
     bool errOpen = true;

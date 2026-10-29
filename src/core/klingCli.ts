@@ -80,6 +80,31 @@ function isWindows(): boolean {
 }
 
 /**
+ * 读一个环境变量。
+ *
+ * UXP 的 process shim 不保证有 env（process.platform 有，process.env 未必），
+ * 所以优先走 require("os").env()，再退回 process.env。
+ */
+function envOf(name: string): string {
+  try {
+    const os: any = require("os");
+    if (typeof os?.env === "function") {
+      const v = os.env(name);
+      if (typeof v === "string" && v) return v;
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    const v = (process as any)?.env?.[name];
+    if (typeof v === "string" && v) return v;
+  } catch {
+    // ignore
+  }
+  return "";
+}
+
+/**
  * 加载 C++ Hybrid addon。
  * 失败返回 null（不抛），调用方转成 addon_unavailable。
  */
@@ -125,6 +150,20 @@ function pickPathLine(out: string, mustEndWith?: string): string {
 }
 
 /**
+ * 从 stdout 中挑出所有绝对路径行（按出现顺序）。
+ * 用于 `where npm` 这类会返回多个结果的命令。
+ */
+function pickAllPathLines(out: string): string[] {
+  const result: string[] = [];
+  for (const raw of (out || "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line.startsWith("/") && !/^[A-Za-z]:[\\/]/.test(line)) continue;
+    result.push(line);
+  }
+  return result;
+}
+
+/**
  * 通过 shell 探测一条命令的绝对路径。
  *
  * 依次尝试：
@@ -139,15 +178,30 @@ async function whichViaShell(
 ): Promise<string> {
   if (isWindows()) {
     const r = await addon.runCommand({
-      exe: "cmd.exe",
+      // 用绝对路径:C++ 侧 ResolveExecutable 虽已支持 PATH 搜索,
+      // 但 PR 拉起的进程环境变量可能不完整,绝对路径最稳。
+      exe: "C:\\Windows\\System32\\cmd.exe",
       args: ["/d", "/s", "/c", shellCmd],
       timeoutMs: 15000,
     });
-    const line = (r.out || "")
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean)[0];
-    return line || "";
+    // 必须复用 pickPathLine —— 不能只取第一行:
+    //   1) `where kling` 会返回多行,第一行是无扩展名的 `kling`(npm 的 sh shim),
+    //      它是 unix shell 脚本,CreateProcessW 根本执行不了;
+    //      真正能跑的是 `kling.cmd`。
+    //   2) `where` 找不到时 cmd.exe 会往 stdout 打印
+    //      "INFO: Could not find files for the given pattern(s).",
+    //      取第一行会把这个提示当成路径。
+    // pickPathLine 会过滤掉非路径行,并按 mustEndWith 筛选后缀。
+    const found = pickPathLine(r.out || "", mustEndWith);
+    if (found) return found;
+
+    // mustEndWith 没匹配上时,退而求其次返回**所有**路径行(多行)。
+    // `where npm` 需要全部结果:它会同时返回 node 自带的 npm 和用户全局的 npm,
+    // 全局包装在后者 —— 只取第一项会指向错误的 node_modules。
+    const all = pickAllPathLines(r.out || "");
+    if (all.length) return all.join("\n");
+
+    return "";
   }
 
   const attempts: Array<{ exe: string; args: string[] }> = [
@@ -173,6 +227,29 @@ async function whichViaShell(
  * 优先用 login shell 查 PATH；查不到时退到常见安装位置（含 nvm/volta）。
  */
 async function locateNode(addon: KlingCliAddon): Promise<string> {
+  if (isWindows()) {
+    // Windows: `where node` 找的是真正的 .exe
+    const viaWhere = await whichViaShell(addon, "where node", ".exe");
+    if (viaWhere) return viaWhere;
+
+    // 常见安装位置兜底
+    const appdata = envOf("APPDATA");
+    for (const p of [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Program Files (x86)\\nodejs\\node.exe",
+      appdata ? `${appdata}\\nvm\\current\\node.exe` : "",
+    ]) {
+      if (!p) continue;
+      const probe = await addon.runCommand({
+        exe: p,
+        args: ["--version"],
+        timeoutMs: 10000,
+      });
+      if (probe.ok) return p;
+    }
+    return "";
+  }
+
   const viaShell = await whichViaShell(addon, "command -v node", "node");
   if (viaShell) return viaShell;
 
@@ -209,6 +286,51 @@ async function locateNpmRoot(
   addon: KlingCliAddon,
   nodePath: string,
 ): Promise<string> {
+  if (isWindows()) {
+    // Windows: npm 全局根不能用 node 目录推导（node 安装目录布局与 unix 完全不同）。
+    //
+    // 收集所有可能的候选根，逐个探测 @klingai 是否真在里面：
+    //   - `npm root -g` 的输出（最准，但依赖 PATH 里有 npm）
+    //   - `where npm` 的每一项的同级 node_modules
+    //     （注意 where npm 会返回多项：node 自带的 C:\Program Files\nodejs\npm.cmd
+    //      和用户全局的 %APPDATA%\npm\npm.cmd，全局包在后者）
+    //   - %APPDATA%\npm\node_modules（标准全局安装位置）
+    const candidates: string[] = [];
+
+    const viaRoot = await whichViaShell(addon, "npm root -g");
+    if (viaRoot) candidates.push(viaRoot);
+
+    const npmCmds = await whichViaShell(addon, "where npm");
+    if (npmCmds) {
+      for (const cmdPath of npmCmds.split(/\r?\n/).map((s) => s.trim()).filter(Boolean)) {
+        const dir = cmdPath.replace(/[\\/][^\\/]+$/, "");
+        if (dir) candidates.push(`${dir}\\node_modules`);
+      }
+    }
+
+    const appdata = envOf("APPDATA");
+    if (appdata) candidates.push(`${appdata}\\npm\\node_modules`);
+
+    // 去重
+    const unique = Array.from(new Set(candidates.map((c) => c.replace(/\//g, "\\"))));
+
+    // 探测 @klingai 是否在其中 —— 这比任何单一来源都可靠
+    for (const root of unique) {
+      const klingDir = `${root}\\@klingai`;
+      const probe = await addon.runCommand({
+        exe: "C:\\Windows\\System32\\cmd.exe",
+        args: ["/d", "/s", "/c", `if exist "${klingDir}" (echo yes) else (echo no)`],
+        timeoutMs: 10000,
+      });
+      if (/\byes\b/i.test(probe.out || "")) {
+        return root;
+      }
+    }
+
+    // 都没探到 @klingai 时返回第一个候选（让上层用探测 JS 入口的方式再试一次）
+    return unique[0] || "";
+  }
+
   const nodeDir = nodePath.replace(/[\\/][^\\/]+$/, "");
   const npmCli = `${nodeDir}/../lib/node_modules/npm/bin/npm-cli.js`;
   const r = await addon.runCommand({
@@ -229,17 +351,21 @@ async function locateNpmRoot(
  * 找不到返回 null。
  */
 async function locateCliEntry(addon: KlingCliAddon): Promise<CliEntry | null> {
-  if (isWindows()) {
-    // Windows：npm 全局安装的 kling 是 kling.cmd，CreateProcessW 不能直接执行批处理，
-    // 但 C++ 侧已封装 cmd.exe /d /s /c 包裹逻辑，这里只需给出 kling.cmd 路径。
-    const found = await whichViaShell(addon, "where kling", "kling.cmd");
-    if (!found) return null;
-    return { exe: found, prefixArgs: [] };
-  }
+  // Windows 与 macOS 走同一套「node 绝对路径 + CLI 的 JS 入口」策略。
+  //
+  // 为什么 Windows 不用 kling.cmd:
+  //   npm 全局装出来的 kling.cmd 内部靠 PATH 找 node
+  //   (`IF EXIST "%dp0%\node.exe" ... ELSE SET "_prog=node"`),
+  //   而 PR 从桌面启动时继承的是精简 PATH,可能没有 node —— 结果是
+  //   CLI 跑起来但报 "node 不是内部或外部命令"。
+  //   直接用 node 绝对路径执行 JS 入口可以完全绕开 PATH 依赖。
+  //
+  // 也不能直接用 `where kling` 的结果:它第一行是无扩展名的 `kling`
+  // (npm 的 unix shim),CreateProcessW 执行不了。
 
   const nodePath = await locateNode(addon);
   if (!nodePath) {
-    console.warn("[klingCli] 未找到 node（login shell 的 PATH 中也没有）");
+    console.warn("[klingCli] 未找到 node（shell 的 PATH 中也没有）");
     return null;
   }
 
@@ -247,8 +373,10 @@ async function locateCliEntry(addon: KlingCliAddon): Promise<CliEntry | null> {
   if (!npmRoot) return null;
 
   // 国内站 @klingai/cli-cn / 海外站 @klingai/cli-global 二选一
+  // 路径分隔符按平台:Windows 用反斜杠,避免 node 在某些路径下解析异常
+  const sep = isWindows() ? "\\" : "/";
   for (const pkg of ["cli-cn", "cli-global"]) {
-    const js = `${npmRoot}/@klingai/${pkg}/dist/cli.js`;
+    const js = [npmRoot, "@klingai", pkg, "dist", "cli.js"].join(sep);
     const probe = await addon.runCommand({
       exe: nodePath,
       args: [js, "--version"],

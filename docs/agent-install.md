@@ -520,8 +520,13 @@ public-hybrid/mac/x64/RocXBridge.uxpaddon     # Intel（构建时产出）
 public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 ```
 
-> 本仓库当前 `public-hybrid/` 下**只有 arm64**（本机为 arm64）。
-> Intel Mac / Windows 需要在对应平台执行 `npm run native:build` 重新产出。
+> **注意**：`public-hybrid/` 已被 `.gitignore` 忽略，仓库里**不包含任何预编译 addon**。
+> 每次出包都需要在对应平台执行 `npm run native:build` 产出，或从其他平台拷贝已编译的 `.uxpaddon` 到对应目录。
+>
+> - **Apple Silicon**：在 Mac 上 `npm run native:build` 产出 `mac/arm64/`
+> - **Intel Mac**：需额外交叉编译一次，产出 `mac/x64/`（见 [cpp-hybrid-build.md](cpp-hybrid-build.md) 的交叉编译章节）
+> - **Windows**：在 Windows 上 `npm run native:build:win` 产出 `win/x64/`
+>
 > agent 装到非 arm64 机器时必须检查这一项。
 
 ---

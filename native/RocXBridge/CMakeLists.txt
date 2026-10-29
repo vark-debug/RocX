@@ -35,6 +35,11 @@ add_library(RocXBridge SHARED ${COMMON_SOURCES})
 
 target_include_directories(RocXBridge PRIVATE ${UXP_SDK_INCLUDE_DIRS})
 
+# 源文件含 UTF-8 中文注释,MSVC 默认按本地代码页(936/GBK)解析会报 C4819 并可能误解析
+if(MSVC)
+    target_compile_options(RocXBridge PRIVATE /utf-8)
+endif()
+
 # runCommand 用 std::thread 跑子进程
 find_package(Threads REQUIRED)
 target_link_libraries(RocXBridge PRIVATE Threads::Threads)
@@ -68,3 +73,22 @@ add_custom_command(TARGET RocXBridge POST_BUILD
         "${UXP_ADDON_OUT_DIR}/RocXBridge.uxpaddon"
     COMMENT "Copying uxpaddon to public-hybrid/${UXP_PLATFORM_DIR}/"
 )
+
+# Windows 侧 runCommand 独立测试 —— 直接调 RunCommandForPlatform 验证能跑起可灵 CLI。
+# 只在 WIN32 下构建:macOS 有对应的 runCommandTest.mm。
+if(WIN32)
+    add_executable(runcommand-win-test
+        test/runcommand-win-test.cpp
+        src/RocXBridgeCommandWin.cpp
+    )
+    target_include_directories(runcommand-win-test PRIVATE
+        "${UXP_SDK_INCLUDE_DIRS}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+    )
+    target_compile_options(runcommand-win-test PRIVATE /utf-8)
+    target_link_libraries(runcommand-win-test PRIVATE
+        Threads::Threads
+        shell32
+        advapi32
+    )
+endif()

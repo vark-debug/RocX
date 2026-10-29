@@ -4,9 +4,11 @@
 >
 > **追溯补录（2026-10-25）**：v0.4.0 发布时未同步写入本文件，以下章节由 [GitHub Release](https://github.com/vark-debug/RocX/releases/tag/v0.4.0) 正文回填。
 
-## 未发布（拟 v0.6.0）
+## v0.6.1 (2026-10-29)
 
 新增**可灵（Kling）图片生成** —— 文生图 / 图生图，与已有的可灵视频共用同一份服务端模型清单与 CLI 登录态。
+
+同时修复 **Windows 平台原生层（C++ addon + launcher 脚本）与 macOS 实现不对齐**导致的问题。macOS 侧除新增可灵图片外，原有功能不受影响。
 
 ### 新增
 
@@ -36,6 +38,35 @@
   - 平台栏排序同步：两个 HTTP 平台都没 Key 时可灵排第一位（可直接用的平台优先）
   - 可灵清单要现拉（`who_am_i`），切过去先加载再取默认模型
 
+### 修复
+
+- **「抓帧→PS」在 Windows 上拉不起 Photoshop**
+  - C++ 侧 Photoshop 查找链此前只有「注册表 + `.jpg` 文件关联」两级：注册表分支在 PR 拉起的受限进程里实际 100% 读不到 `HKLM\SOFTWARE\Adobe\Photoshop\<ver>\ApplicationPath`；而 `.jpg` 的默认关联常是「照片 / WPS」，查到的根本不是 Photoshop，却会静默用错应用打开图片并返回 `ok=true`
+  - 查找链补齐为四级：注册表 → Adobe CC 默认安装路径（CC 2018~2026+）→ **`C:\Program Files\Adobe\` 子目录枚举** → `.psd` 文件关联
+  - **新增目录枚举兜底**，覆盖绿色版 / Portable 安装 —— 这类不写注册表且目录名不标准（`PS2024`、`PS 2024 绿色版` 等），固定候选列表覆盖不到；多个候选时按目录名里的年份取最新
+  - 新增 Photoshop 校验，确保最终解析出的确实是 `Photoshop.exe`
+  - 注册表返回值是目录而非 exe，拼接 `Photoshop.exe` 后再校验存在性
+  - 传给 `ShellExecuteExW` 的路径加引号 —— 此前裸传含空格的路径会被拆成多个 argv
+  - 补文件存在性校验（对齐 macOS 的 `fileExistsAtPath`）
+  - 剥离 `\\?\` 扩展长度前缀 —— UXP 的 nativePath 常带此前缀，直接交给 `ShellExecuteExW` 会打不开
+- **可灵 CLI 在 Windows 上误报「未安装」或执行失败**
+  - `whichViaShell` 的 Windows 分支此前完全忽略 `mustEndWith` 参数、直接取输出第一行。`where kling` 会返回两行，第一行是无扩展名的 `kling`（npm 的 unix sh shim，`#!/bin/sh` 开头），`CreateProcessW` 根本执行不了，真正能跑的是 `kling.cmd`；同时 `where` 找不到时 cmd.exe 会往 stdout 打印 `INFO: Could not find files for the given pattern(s).`，取第一行会把它当成路径
+  - 删去 Windows 独立分支，改为与 macOS 统一走「**node 绝对路径 + CLI 的 JS 入口**」。原因：npm 装出来的 `kling.cmd` 内部靠 PATH 找 node，而 PR 从桌面启动时继承精简 PATH，可能没有 node，结果 CLI 跑起来但报 "node 不是内部或外部命令"
+  - npm 全局根定位改为多候选 + 逐个探测 `@klingai` 是否真在其中 —— `where npm` 会返回多项（node 自带的 `C:\Program Files\nodejs\npm.cmd` 与用户全局的 `%APPDATA%\npm\npm.cmd`），只取第一项会指向错误的 `node_modules`
+  - 新增 `envOf` 辅助函数（UXP 的 `os` 模块只有 `platform` / `release` / `arch` 等，**没有** `env`；`process.env` 也不保证存在）
+- **Windows 上 `launcher.cmd` 脚本这一级被整级跳过**
+  - `launcher.ps1` 此前硬编码 pluginId（`com.rocx.uxp`）与固定的 `PluginsStorage\PPRO\*\Developer\` 层级。正式 CCX 包因 `uniqueIds` 会把 manifest id 变成 `com.rocx.uxp_premierepro`（开发模式才是 `com.rocx.uxp`），且 CCX 双击安装走 `External` 段而非 `Developer` —— 硬编码任一项都会导致找不到 args 文件、脚本静默 `exit 0` 什么都不做。改为递归搜索整个 UXP 根目录、只按文件名匹配（与 macOS 的 `launcher.command` 一致）
+  - launcher 脚本在 **dev 模式（`vite build --watch`）下不拷贝**到 `dist/` —— 原先 `copyLauncherAssets` 带 `apply: 'build'`，只有 build 模式会执行，导致 UXP 探测失败后该级被跳过
+  - 探针 URL 改为对反斜杠路径做正斜杠归一后再转 `file://` URL。`pathToFileUrl` 只剥 `\\?\` 前缀、不做分隔符转换，直接用会得到 `file:///D:\RocX\dist\launcher.cmd` 这种 UXP 解析不了的 URL
+  - `launcher.ps1` 同步新增 `C:\Program Files\Adobe\` 子目录枚举兜底，与 C++ 侧查找链对齐
+- **Windows C++ 侧 `runCommand` 的两处缺陷**
+  - `ResolveExecutable` 只按 CWD 解析相对路径，不搜 PATH —— 而 PR 拉起的进程 CWD 不可控，导致 `cmd.exe` / `kling` 这类裸命令名被判「找不到」
+  - `TrimToUtf8Boundary` 存在 off-by-one：会把一个完整中文字符多砍掉一个字节，与 macOS 的 `Utf8CharLength` 行为不一致。中文 prompt 与含中文+空格的素材路径经 addon 传递时受影响（已加往返测试覆盖）
+- **Windows 编译期问题**
+  - `wideFromUtf8` 返回类型声明为 `std::string` 但实际返回 `std::wstring`，导致 11 处编译错误（C2440 / C2664 / C2088 / C2446 / C2660），Windows 侧 addon 无法编译
+  - `SetNamedPipeHandleState` 用在匿名管道上本就无效（静默失败），予以移除
+  - MSVC 补 `/utf-8` —— 否则按 GBK(936) 解析含中文注释的源文件，注释末尾字符可能被误解析（C4819）
+
 ### 变更
 
 - 图片记录的 `imageParams` 对可灵**不写** —— 实际像素由服务端决定（提交时不知道），写一个编出来的像素数会误导；记录列表改为展示比例与档位
@@ -54,11 +85,25 @@
   - 点在选项上（radio-item）或切换按钮上不收起 —— 用户还在选，不打断
   - 抽出共用 composable `usePopoverDismiss`（视频 / 图片两个组件复用同一套规则，避免两份实现漂移）
   - 视频侧的 ✨ 优化按钮：收起浮层但**不抢焦点**（点了要等优化结果）
+- **未安装 Photoshop 时不再静默降级**：此前 C++ 明确判定「这台机器没装 Photoshop」后，仍会继续降级到系统关联兜底，用图片的默认打开程序打开（`.jpg` 默认关联常是「照片 / WPS」），用户看到的是「打开了某个应用文件夹」，完全无法判断发生了什么。现在直接返回失败，并在 UI 弹 toast 提示「未检测到 Photoshop 安装，请先安装 Photoshop 后重试」
+- `launcher.ps1` 递归搜索 UXP 根目录后，路径匹配不再依赖 manifest id 与安装层级
+- **跨平台 addon 产物入库**（`public-hybrid/` 解除 `.gitignore` 屏蔽）
+  - 此前各平台 addon 产物不入库，打出同时含 mac / win addon 的 CCX 必须靠人工在各平台分别编译、再手工拷贝产物 —— 极易把 Windows 产物误放进 `mac/arm64/`，导致 macOS 侧 addon 加载失败、静默降级到 launcher 脚本
+  - 解除屏蔽后，mac 上执行 `npm run build` / `npm run ccx` 即可产出双平台 addon 齐全的安装包
+  - 新增 `.gitattributes` 保护二进制：仓库 `core.autocrlf=true`，而 `.uxpaddon` 是裸二进制（Mach-O dylib / PE DLL，非 zip），一旦被 CRLF 转换文件结构即损坏、UEP 加载即失败。用 `*.uxpaddon binary` 关闭文本转换、diff 与合并；另把 `.sh` / `launcher.command` 固定为 LF，避免 macOS 上因 CRLF 导致 shebang 失效
 
 ### 兼容性
 
 - 可灵图片功能依赖本机已安装并已登录的 `kling` CLI；缺失时其余平台不受影响
-- 插件 manifest 无变更
+- **macOS 侧原有行为不变** —— Windows 对齐相关改动全部落在 Windows 专属实现与跨平台的 JS 定位逻辑中，`RocXBridgeMac.mm` / `RocXBridgeCommand.mm` 未改动
+- 插件 manifest 无变更（版本号由 `package.json` 读取后写入 manifest，随本次发布升至 0.6.1）
+- 「抓帧→PS」与可灵 CLI 的 C++ 路径依赖 **PR ≥ 26.2** —— 更低版本 `require` 会抛 "Addon is not supported"，此时走 launcher 脚本兜底
+
+### 已知限制
+
+- **绿色版 Photoshop 仅覆盖 `C:\Program Files\Adobe\` 与 `C:\Program Files (x86)\Adobe\` 下的一级 / 二级子目录**。装在其他盘符、Adobe 目录之外、或三级及更深目录的仍无法定位，需手动指定路径
+- 「抓帧→PS」在 Windows 上**未做绿色版真实环境验证** —— 目录枚举逻辑已用模拟目录结构验证（不标准目录名可命中、年份更晚者优先），但未在真实绿色版上跑通
+- Windows 侧 native 测试此前为零（`native/RocXBridge/test/` 只有 macOS 版本），本次补上 C++ 层与 JS 层两组，但整体覆盖率仍落后于 macOS
 
 ## v0.5.0 (2026-10-27)
 
