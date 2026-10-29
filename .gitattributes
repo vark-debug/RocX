@@ -1,0 +1,13 @@
+# Git 属性配置
+#
+# 关键:.uxpaddon 必须按二进制处理
+#
+# 仓库 core.autocrlf = true,Git 会把 LF 转成 CRLF。
+# .uxpaddon 是裸二进制(Mach-O dylib / PE DLL,非 zip),
+# 一旦被 CRLF 转换,文件结构直接损坏、UEP 加载即失败。
+# 用 binary 宏一次性关闭文本转换、diff 与合并。
+*.uxpaddon binary
+
+# 脚本保持 LF,避免在 macOS 上因 CRLF 导致 "Permission denied" / shebang 失效
+*.sh text eol=lf
+launcher.command text eol=lf
