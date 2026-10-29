@@ -37,8 +37,11 @@ export function useRecordEdit(opts: {
   /**
    * 图片记录回填回调（generationMode / imagePrompt 等图片态在 main-webview 顶层持有，
    * 不在 SharedRefs 里，由调用方注入回填实现）
+   *
+   * 可以是 async —— 回填要切图片平台（切可灵要现拉模型清单），
+   * 不等它完成就写 model 会被切平台的默认值覆盖。
    */
-  retryImage?: (rec: GenerationRecord) => void;
+  retryImage?: (rec: GenerationRecord) => void | Promise<void>;
 } = {}) {
   const sharedRaw = inject(SharedRefsKey);
   if (!sharedRaw) {
@@ -62,7 +65,9 @@ export function useRecordEdit(opts: {
     }
     if (rec.kind === "image") {
       // 图片记录参数与视频 UI 不同,回填由 main-webview 注入的实现处理
-      opts.retryImage?.(rec);
+      // ⚠ 必须 await —— 回填会切图片平台（切可灵要现拉模型清单）,
+      // 不等它完成就返回,用户点「生成」时平台还没切过去
+      await opts.retryImage?.(rec);
       shared.selectedRecordId.value = rec.id;
       return;
     }

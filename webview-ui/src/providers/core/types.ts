@@ -31,6 +31,15 @@ export interface ModelParamConstraints {
   ratios: string[];
   /** 仅参考模式可选 ratio=adaptive（已废弃，留作兼容：等价于 ratios 包含 "adaptive"） */
   ratioAdaptiveAllowed: boolean;
+  /**
+   * 服务端声明的默认分辨率档位（可选）。
+   *
+   * 只有可灵图片用得到 —— 它的 img_resolution 默认是 "2k"，
+   * 切换平台时按它初始化，比退到值域首项（"1k"）更贴合服务端意图。
+   */
+  defaultResolution?: string;
+  /** 服务端声明的默认宽高比（可选，同上） */
+  defaultRatio?: string;
 }
 
 // 能力位
@@ -54,6 +63,14 @@ export interface ImageGenCreateRequest {
   height: number;
   /** 输出格式："jpeg" | "png" */
   outputFormat: string;
+  /**
+   * provider 原生的分辨率档位（可选）。
+   *
+   * 可灵图片用服务端声明的 img_resolution（"1k"/"2k"/"4k"），与 width/height
+   * 像素语义不同 —— 有了这个字段，provider 不必从像素反推档位。
+   * 其余 provider 不需要这个字段（width/height 已是权威）。
+   */
+  resolutionTier?: string;
   /** 张数（阶段 2A 固定 1；RunningHub 单次仅出 1 张） */
   count: number;
   references: ReferenceItem[];   // 有参考图 → image-to-image 路由；无 → text-to-image

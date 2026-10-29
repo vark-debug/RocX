@@ -44,6 +44,7 @@ import {
 import type { KlingModelCatalog } from "./wireFormat";
 import { parseKlingError, friendlyKlingError, extractKlingRechargeUrl } from "./errorMap";
 import { ensureKlingUrls, isKlingUrlExpired } from "./klingPreUpload";
+import { syncKlingImageModels } from "./imageState";
 
 // ---------- 模块级响应式状态 ----------
 //
@@ -163,6 +164,8 @@ export async function restoreKlingEnvSnapshot(): Promise<boolean> {
       if (models.length) {
         catalogCache = catalog;
         klingModels.value = models;
+        // 图片侧同样从快照恢复（否则二次启动图片模型清单是空的）
+        syncKlingImageModels(catalog);
       }
     }
     return true;
@@ -223,6 +226,8 @@ export async function loadKlingModels(opts?: {
     }
     catalogCache = catalog;
     klingModels.value = models;
+    // 图片侧共用同一份 catalog（不额外发 CLI）
+    syncKlingImageModels(catalog);
     klingEnv.value = {
       ...klingEnv.value,
       ready: true,
@@ -253,6 +258,18 @@ export async function ensureKlingCatalog(): Promise<KlingModelCatalog> {
       { errorType: "catalog_unavailable", providerId: KLING_PROVIDER_ID },
     );
   }
+  return catalogCache;
+}
+
+/**
+ * 同步取已缓存的 catalog（不发 CLI）。
+ *
+ * 供图片侧读取「服务端 defaultModel」用 —— 图片侧要同步知道默认模型
+ * 才能在 UI 里渲染初始选中项，等不起一次 CLI。
+ *
+ * 返回 null 表示还没拉过清单（调用方按「未就绪」处理）。
+ */
+export function getKlingCatalogSync(): KlingModelCatalog | null {
   return catalogCache;
 }
 

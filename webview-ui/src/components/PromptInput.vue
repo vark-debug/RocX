@@ -8,6 +8,7 @@ import type {
 } from "@shared/messages";
 import type { ModelDescriptor, VideoGenCapability } from "../providers/core/types";
 import { useTemplateTrigger } from "../composables/usePromptTemplates";
+import { usePopoverDismiss } from "../composables/usePopoverDismiss";
 import TemplatePopover from "./TemplatePopover.vue";
 
 const props = defineProps<{
@@ -90,6 +91,12 @@ function toggleParamsPopover() {
   modelPopoverOpen.value = false;
 }
 
+/** 点提示词输入框 → 收起模型 / 参数浮层 */
+function closeParamPopovers() {
+  modelPopoverOpen.value = false;
+  paramsPopoverOpen.value = false;
+}
+
 const submitLabel = computed(() => {
   // 可灵不需要 key（needsApiKey=false），别拿「请配置 API Key」误导用户
   if (props.needsApiKey !== false && !props.hasApiKey) {
@@ -150,6 +157,16 @@ function onPromptInput(e: Event) {
   emit("update:prompt", (e.target as HTMLTextAreaElement).value);
   tpl.onInput(e);
 }
+
+// 点提示词输入框 / 浮层外部 → 收起模型与参数浮层
+// ⚠ 视频侧 textarea 右上角还挂着 ✨ 优化按钮，它不是浮层内容，
+//   点它该收起浮层，但不该把焦点抢回输入框（点了 ✨ 要等优化结果）。
+usePopoverDismiss({
+  isOpen: () => modelPopoverOpen.value || paramsPopoverOpen.value,
+  close: closeParamPopovers,
+  textareaRef: promptTextarea,
+  noFocus: [".optimize-btn"],
+});
 </script>
 
 <template>
@@ -161,6 +178,7 @@ function onPromptInput(e: Event) {
         @input="onPromptInput"
         @keydown="tpl.onKeydown"
         @blur="tpl.close"
+        @click="closeParamPopovers"
         placeholder="描述你想生成的视频... 或按 / 选择提示词模板"
         rows="2"
       ></textarea>
