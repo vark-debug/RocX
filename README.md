@@ -21,11 +21,12 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 软件 | Adobe Premiere Pro **25.6.4 或更高版本** |
+| 软件 | Adobe Premiere Pro **25.6.4 或更高版本**（可灵功能需 **26.2+**，见下方说明） |
 | 操作系统 | **Windows** 与 **macOS**（v0.2.0 起双平台全量验证） |
 | 安装方式 | UXP 插件（CCX 包，manifest v6） |
 | 网络 | 需可达各 provider 域名（见下方[网络白名单](#网络白名单)） |
-| 账号 | 对应平台签发的 API Key（详见[配置 API Key](#配置-api-key)） |
+| 账号 | 对应平台签发的 API Key（详见[配置 API Key](#配置-api-key)）；**可灵不需要 API Key**，需本机已安装 `kling` CLI 并完成登录 |
+| 可灵功能依赖 | **Adobe PR ≥ 26.2 + 本机已安装并登录的 `kling` CLI**：可灵走 C++ Hybrid addon 的 `runCommand` 调本机 CLI，而 addon 仅在 PR 26.2+ 可加载（更早版本报 "Addon is not supported"）。其余功能（MiniMax / RunningHub / 火山方舟）在 25.6 上不受影响。CLI 安装见 [docs/agent-install.md](docs/agent-install.md) |
 | 抓视频依赖 | **Adobe Media Encoder（AME）必须已安装并能正常启动**：抓视频基于 Premiere UXP 的 [`EncoderManager.exportSequence`](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/encodermanager)，按官方文档说明，该 API 的转码由 AME 后台执行（`exportType` 含 `QUEUE_TO_AME`，事件如 `EVENT_RENDER_COMPLETE / ERROR / PROGRESS` 也由 AME 广播）；`EncoderManager` 还提供了 `isAMEInstalled` 属性用于检测。**Win / Mac 若仅装 Premiere 而未装 / 未授权 AME，抓视频将无法完成**；抓帧（基于 `Exporter.exportSequenceFrame`）不受此影响 |
 
 ### 网络白名单
