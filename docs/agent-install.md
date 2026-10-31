@@ -5,6 +5,8 @@
 >
 > 本文档所有路径、命令、目录结构均为**本机实测结论**（macOS 26.x / arm64 / Premiere Pro 26.5.0 / Adobe UXP 8.x）。
 > 与项目内置的 [README](../README.md) 面向「最终用户手动安装」，两者分工不同。
+>
+> **目标机器 PR < 25.6（如 PR 2021），或没有 / 不想装 AME？** → 改装 CEP 版兄弟仓库 **[rocx-cep](https://github.com/vark-debug/rocx-cep)**，见下文「[CEP 版替代方案](#cep-版替代方案pr--256--免-ame)」章节（其可灵 CLI 步骤与本文 §3 / §4 完全通用）。
 
 ---
 
@@ -16,6 +18,8 @@
 | 2 | 装可灵 CLI（`@klingai/cli-cn`） | ✅ 全自动 | 无 | [§3](#3-安装可灵-cli) |
 | 3 | 登录可灵 CLI | ⚠️ 半自动 | **浏览器点一次「同意」** | [§4](#4-登录可灵-cli) |
 | 4 | 校验与收尾 | ✅ 全自动 | 无 | [§5](#5-校验与收尾) |
+
+> **前置探测发现 PR < 25.6、或用户明确不想装 AME？** 别硬装 UXP 版 —— 改装 CEP 版兄弟仓库 [rocx-cep](https://github.com/vark-debug/rocx-cep)，见下文「CEP 版替代方案」章节。
 
 **agent 的一句话职责**：跑完 §2 → §3 → §4 的命令，把 §4 里「请用户在浏览器里点同意」这句话转告用户，然后跑 §5 确认就绪。
 
@@ -60,10 +64,39 @@ npm prefix -g
 |---|---|
 | PR 未运行 | ✅ 最佳时机，装完插件直接让用户开 PR 即可生效 |
 | PR 运行中 | 装完插件**必须重启 PR**（§2.4） |
-| PR 版本 < 25.6.0 | ⛔ **停止**，插件无法加载（Hybrid addon 需要 PR 25.6+） |
+| PR 版本 < 25.6.0 | ⛔ UXP 版无法加载（Hybrid addon 需要 PR 25.6+）→ **改装 CEP 版**（见下文「CEP 版替代方案」） |
 | node 缺失 | 先装 node（[§6.2](#62-node-缺失)） |
 | npm prefix 不可写 | 改用自定义 prefix（[§3.3](#33-prefix-不可写时的降级方案)） |
-| AME 缺失 | 不阻塞安装，但要在最后告知用户「抓视频功能不可用」 |
+| AME 缺失 | 不阻塞安装；告知用户「抓视频功能不可用」，或建议改装 CEP 版（抓视频免 AME） |
+
+---
+
+## CEP 版替代方案（PR < 25.6 / 免 AME）
+
+[rocx-cep](https://github.com/vark-debug/rocx-cep) 是本项目的 **CEP 架构兄弟仓库**。目标机器命中以下任一情况时，应改装它而不是继续走本文的 UXP 安装流程：
+
+- **PR 版本低于 25.6** —— UXP 版的 Hybrid addon 装不上；CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
+- **没有 / 不想装 Adobe Media Encoder** —— CEP 版抓视频走 PR 内置导出管线，**无 AME 依赖**
+
+当前能力边界：**仅可灵**一个生成后端（文生视频 / 图生视频 / 文生图 / 图生图，走 `kling` CLI 登录态，无需 API Key）；MiniMax / RunningHub / 火山方舟 等 HTTP API 平台与飞书多维表格上报**暂未接入**。抓帧 / 抓帧→PS / 抓视频 / 提示词模板 / 智能填参 / 生成记录均已具备。
+
+**agent 安装步骤**（CEP 版比 UXP 版简单得多，无需 UPIA 与 UPI.db 登记）：
+
+```bash
+# 1) 下载 Release 安装包（资产命名 RocX-CEP_<版本>.zip，按最新 tag 替换）
+gh release download v0.1.1 -R vark-debug/rocx-cep -p 'RocX-CEP_*.zip' -O /tmp/rocx-cep.zip
+
+# 2) 解压到 CEP 扩展目录（解压后得到 extensions/com.rocx.cep/）
+unzip /tmp/rocx-cep.zip -d "$HOME/Library/Application Support/Adobe/CEP/extensions/"
+
+# 3) 开 PlayerDebugMode（未签名扩展需要；也可改用 Release 里的 .zxp 拖进 ZXP Installer，免此步）
+defaults write com.adobe.CSXS.11 PlayerDebugMode 1
+defaults write com.adobe.CSXS.12 PlayerDebugMode 1
+
+# 4) 可灵 CLI 安装与登录：与本文 §3 / §4 完全相同（CLI 全局安装，UXP / CEP 两版共用）
+```
+
+然后重启 PR，菜单 **窗口 → 扩展 → RocX** 打开面板。详细说明（含 Windows 的 PowerShell 注册表写法）见其仓库 README。
 
 ---
 
@@ -492,6 +525,7 @@ pgrep -f "Adobe Premiere Pro" >/dev/null && echo "⚠️  PR 运行中 → 需�
 - AME 缺失 → 抓视频失败；**抓帧不受影响**
 - 检测：`ls -d /Applications/Adobe\ Media\ Encoder*/Adobe\ Media\ Encoder*.app`
 - agent 无法代装（需 Creative Cloud 账号与授权），只能提示用户
+- 用户不想装 AME 的另一条路：改装 [rocx-cep](https://github.com/vark-debug/rocx-cep)（CEP 版，抓视频免 AME，见「CEP 版替代方案」）
 
 ### 6.2 node 缺失
 
@@ -535,7 +569,7 @@ public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| PR 里看不到 RocX 面板 | PR 未重启 / 插件目录没落地 / PR 版本 < 25.6 | 重启 PR；`ls` 目录；查 PR 版本 |
+| PR 里看不到 RocX 面板 | PR 未重启 / 插件目录没落地 / PR 版本 < 25.6 | 重启 PR；`ls` 目录；查 PR 版本 —— 版本 < 25.6 → 改装 CEP 版（见「CEP 版替代方案」） |
 | 面板出现但提示「可灵环境未就绪」 | CLI 未装或未登录 | 跑 §3.4 / §4.4 验证 |
 | `env: node: No such file or directory` | 用了 shebang 脚本且 PATH 精简 | 改用 `node + npm-cli.js`（§3.2） |
 | `kling login` 浏览器不弹 | 无头环境 / `open` 失败 | 从 stderr 抓 URL 手动 `open`（§4.3） |
@@ -554,6 +588,8 @@ public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 ## RocX 安装任务清单（macOS）
 
 - [ ] 0. 跑前置探测（§1），记录 PR 版本 / node / npm prefix 可写性 / AME
+  - **PR < 25.6 → 改走「CEP 版替代方案」章节，跳过下面第 1 步**（§3 / §4 的可灵 CLI 步骤照旧）
+  - AME 缺失 → 不阻塞，收尾时提醒用户（或按需建议 CEP 版）
 - [ ] 1. 下载 CCX：`curl -fL -o /tmp/rocx.ccx https://github.com/vark-debug/RocX/releases/download/v0.4.1/com.rocx.uxp_premierepro.ccx`
 - [ ] 2. UPIA 安装：`"$UPIA" --install /tmp/rocx.ccx`，验证目录 + manifest.json + addon 在位
 - [ ] 3. 装可灵 CLI：`"$NODE" "$NPMCLI" install -g @klingai/cli-cn`，验证 `kling-cli` 版本号

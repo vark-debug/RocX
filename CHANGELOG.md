@@ -38,6 +38,41 @@
   - 平台栏排序同步：两个 HTTP 平台都没 Key 时可灵排第一位（可直接用的平台优先）
   - 可灵清单要现拉（`who_am_i`），切过去先加载再取默认模型
 
+### 变更
+
+- 图片记录的 `imageParams` 对可灵**不写** —— 实际像素由服务端决定（提交时不知道），写一个编出来的像素数会误导；记录列表改为展示比例与档位
+- 记录回填（重试）按记录里的 provider **回切平台**（切可灵要现拉模型清单，必须等它完成再写模型）
+- **图片模式的宽高比 / 分辨率默认值改为「按平台声明」**
+  - 宽高比默认 **「自动」**（`aspect_ratio="auto"`）、分辨率默认 **2k**（`img_resolution="2k"`），取自服务端对当前模型的声明（默认模型 `kling-image-v3_0_omni`），不是写死常量
+  - 引入「用户是否手动选过」标记：**没选过** → 每次切平台 / 切模型都取该平台的声明默认值；**选过** → 保留用户的选择，只在值域非法时收敛
+  - 记录回填（重试）视为「用户选定」，不会被默认值覆盖
+  - 其余平台不受影响（仍是 "1:1" + 「智能」）
+- **可灵图片：切模型时宽高比不再跳变**
+  - 服务端给各模型声明的默认宽高比本就不一致（实测 `text_to_image` 下 o3 声明 `auto`、o1 / v3_0 声明 `1:1`、v2_1 声明 `3:4`）→ 按各自声明取默认值会让「平台默认值」随模型漂移
+  - 改为取**平台默认值**（服务端默认模型 `kling-image-v3_0_omni` 的声明）；模型不支持该值时（如 v2_1 两个工具都不声明 `auto`）才退回自己的声明默认
+  - 宽高比列表里的「自动」固定排在首位 —— 并集里它只来自 `image_to_image` 声明，直接展开会排在末尾，切模型时列表顺序会来回跳
+- **点击提示词输入框自动收起模型 / 参数浮层**（视频 + 图片两个模式一致）
+  - 浮层向上展开、**正好压住输入框**，所以用文档级 `click`（捕获阶段）监听，并在点击坐标命中输入框时把焦点还给输入框，用户点完可直接打字
+  - 点在选项上（radio-item）或切换按钮上不收起 —— 用户还在选，不打断
+  - 抽出共用 composable `usePopoverDismiss`（视频 / 图片两个组件复用同一套规则，避免两份实现漂移）
+  - 视频侧的 ✨ 优化按钮：收起浮层但**不抢焦点**（点了要等优化结果）
+- **未安装 Photoshop 时不再静默降级**：此前 C++ 明确判定「这台机器没装 Photoshop」后，仍会继续降级到系统关联兜底，用图片的默认打开程序打开（`.jpg` 默认关联常是「照片 / WPS」），用户看到的是「打开了某个应用文件夹」，完全无法判断发生了什么。现在直接返回失败，并在 UI 弹 toast 提示「未检测到 Photoshop 安装，请先安装 Photoshop 后重试」
+- `launcher.ps1` 递归搜索 UXP 根目录后，路径匹配不再依赖 manifest id 与安装层级
+- **跨平台 addon 产物入库**（`public-hybrid/` 解除 `.gitignore` 屏蔽）
+  - 此前各平台 addon 产物不入库，打出同时含 mac / win addon 的 CCX 必须靠人工在各平台分别编译、再手工拷贝产物 —— 极易把 Windows 产物误放进 `mac/arm64/`，导致 macOS 侧 addon 加载失败、静默降级到 launcher 脚本
+  - 解除屏蔽后，mac 上执行 `npm run build` / `npm run ccx` 即可产出双平台 addon 齐全的安装包
+  - 新增 `.gitattributes` 保护二进制：仓库 `core.autocrlf=true`，而 `.uxpaddon` 是裸二进制（Mach-O dylib / PE DLL，非 zip），一旦被 CRLF 转换文件结构即损坏、UEP 加载即失败。用 `*.uxpaddon binary` 关闭文本转换、diff 与合并；另把 `.sh` / `launcher.command` 固定为 LF，避免 macOS 上因 CRLF 导致 shebang 失效
+- **文档补充 CEP 版兄弟仓库指引**（[rocx-cep](https://github.com/vark-debug/rocx-cep)）
+  - README「环境要求」新增「CEP 版本」小节：PR 低于 25.6（如 PR 2021，CEP 版实测 Windows）或不想依赖 AME（CEP 版抓视频免 AME）的用户可改用 CEP 版；列明能力差异（当前仅可灵 CLI 后端，HTTP API 平台与飞书上报暂未接入）
+  - agent-install 指南：新增「CEP 版替代方案」章节（ZIP 解压 + PlayerDebugMode 安装步骤，无需 UPIA），§0 速查 / §1 探测决策表 / §6.1 AME / §7 故障速查 / §8 执行清单同步加入改道指引 —— 可灵 CLI 安装与登录（§3 / §4）对两版通用
+
+### 兼容性
+
+- 可灵图片功能依赖本机已安装并已登录的 `kling` CLI；缺失时其余平台不受影响
+- **macOS 侧原有行为不变** —— Windows 对齐相关改动全部落在 Windows 专属实现与跨平台的 JS 定位逻辑中，`RocXBridgeMac.mm` / `RocXBridgeCommand.mm` 未改动
+- 插件 manifest 无变更（版本号由 `package.json` 读取后写入 manifest，随本次发布升至 0.6.1）
+- 「抓帧→PS」与可灵 CLI 的 C++ 路径依赖 **PR ≥ 26.2** —— 更低版本 `require` 会抛 "Addon is not supported"，此时走 launcher 脚本兜底
+
 ### 修复
 
 - **「抓帧→PS」在 Windows 上拉不起 Photoshop**
@@ -66,38 +101,6 @@
   - `wideFromUtf8` 返回类型声明为 `std::string` 但实际返回 `std::wstring`，导致 11 处编译错误（C2440 / C2664 / C2088 / C2446 / C2660），Windows 侧 addon 无法编译
   - `SetNamedPipeHandleState` 用在匿名管道上本就无效（静默失败），予以移除
   - MSVC 补 `/utf-8` —— 否则按 GBK(936) 解析含中文注释的源文件，注释末尾字符可能被误解析（C4819）
-
-### 变更
-
-- 图片记录的 `imageParams` 对可灵**不写** —— 实际像素由服务端决定（提交时不知道），写一个编出来的像素数会误导；记录列表改为展示比例与档位
-- 记录回填（重试）按记录里的 provider **回切平台**（切可灵要现拉模型清单，必须等它完成再写模型）
-- **图片模式的宽高比 / 分辨率默认值改为「按平台声明」**
-  - 宽高比默认 **「自动」**（`aspect_ratio="auto"`）、分辨率默认 **2k**（`img_resolution="2k"`），取自服务端对当前模型的声明（默认模型 `kling-image-v3_0_omni`），不是写死常量
-  - 引入「用户是否手动选过」标记：**没选过** → 每次切平台 / 切模型都取该平台的声明默认值；**选过** → 保留用户的选择，只在值域非法时收敛
-  - 记录回填（重试）视为「用户选定」，不会被默认值覆盖
-  - 其余平台不受影响（仍是 "1:1" + 「智能」）
-- **可灵图片：切模型时宽高比不再跳变**
-  - 服务端给各模型声明的默认宽高比本就不一致（实测 `text_to_image` 下 o3 声明 `auto`、o1 / v3_0 声明 `1:1`、v2_1 声明 `3:4`）→ 按各自声明取默认值会让「平台默认值」随模型漂移
-  - 改为取**平台默认值**（服务端默认模型 `kling-image-v3_0_omni` 的声明）；模型不支持该值时（如 v2_1 两个工具都不声明 `auto`）才退回自己的声明默认
-  - 宽高比列表里的「自动」固定排在首位 —— 并集里它只来自 `image_to_image` 声明，直接展开会排在末尾，切模型时列表顺序会来回跳
-- **点击提示词输入框自动收起模型 / 参数浮层**（视频 + 图片两个模式一致）
-  - 浮层向上展开、**正好压住输入框**，所以用文档级 `click`（捕获阶段）监听，并在点击坐标命中输入框时把焦点还给输入框，用户点完可直接打字
-  - 点在选项上（radio-item）或切换按钮上不收起 —— 用户还在选，不打断
-  - 抽出共用 composable `usePopoverDismiss`（视频 / 图片两个组件复用同一套规则，避免两份实现漂移）
-  - 视频侧的 ✨ 优化按钮：收起浮层但**不抢焦点**（点了要等优化结果）
-- **未安装 Photoshop 时不再静默降级**：此前 C++ 明确判定「这台机器没装 Photoshop」后，仍会继续降级到系统关联兜底，用图片的默认打开程序打开（`.jpg` 默认关联常是「照片 / WPS」），用户看到的是「打开了某个应用文件夹」，完全无法判断发生了什么。现在直接返回失败，并在 UI 弹 toast 提示「未检测到 Photoshop 安装，请先安装 Photoshop 后重试」
-- `launcher.ps1` 递归搜索 UXP 根目录后，路径匹配不再依赖 manifest id 与安装层级
-- **跨平台 addon 产物入库**（`public-hybrid/` 解除 `.gitignore` 屏蔽）
-  - 此前各平台 addon 产物不入库，打出同时含 mac / win addon 的 CCX 必须靠人工在各平台分别编译、再手工拷贝产物 —— 极易把 Windows 产物误放进 `mac/arm64/`，导致 macOS 侧 addon 加载失败、静默降级到 launcher 脚本
-  - 解除屏蔽后，mac 上执行 `npm run build` / `npm run ccx` 即可产出双平台 addon 齐全的安装包
-  - 新增 `.gitattributes` 保护二进制：仓库 `core.autocrlf=true`，而 `.uxpaddon` 是裸二进制（Mach-O dylib / PE DLL，非 zip），一旦被 CRLF 转换文件结构即损坏、UEP 加载即失败。用 `*.uxpaddon binary` 关闭文本转换、diff 与合并；另把 `.sh` / `launcher.command` 固定为 LF，避免 macOS 上因 CRLF 导致 shebang 失效
-
-### 兼容性
-
-- 可灵图片功能依赖本机已安装并已登录的 `kling` CLI；缺失时其余平台不受影响
-- **macOS 侧原有行为不变** —— Windows 对齐相关改动全部落在 Windows 专属实现与跨平台的 JS 定位逻辑中，`RocXBridgeMac.mm` / `RocXBridgeCommand.mm` 未改动
-- 插件 manifest 无变更（版本号由 `package.json` 读取后写入 manifest，随本次发布升至 0.6.1）
-- 「抓帧→PS」与可灵 CLI 的 C++ 路径依赖 **PR ≥ 26.2** —— 更低版本 `require` 会抛 "Addon is not supported"，此时走 launcher 脚本兜底
 
 ### 已知限制
 

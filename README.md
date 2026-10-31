@@ -21,13 +21,31 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 软件 | Adobe Premiere Pro **25.6.4 或更高版本**（可灵功能需 **26.2+**，见下方说明） |
+| 软件 | Adobe Premiere Pro **25.6.4 或更高版本**（可灵功能需 **26.2+**，见下方说明；**更低版本可用 [CEP 版](https://github.com/vark-debug/rocx-cep)**，见下方小节） |
 | 操作系统 | **Windows** 与 **macOS**（v0.2.0 起双平台全量验证） |
 | 安装方式 | UXP 插件（CCX 包，manifest v6） |
 | 网络 | 需可达各 provider 域名（见下方[网络白名单](#网络白名单)） |
 | 账号 | 对应平台签发的 API Key（详见[配置 API Key](#配置-api-key)）；**可灵不需要 API Key**，需本机已安装 `kling` CLI 并完成登录 |
 | 可灵功能依赖 | **Adobe PR ≥ 26.2 + 本机已安装并登录的 `kling` CLI**：可灵走 C++ Hybrid addon 的 `runCommand` 调本机 CLI，而 addon 仅在 PR 26.2+ 可加载（更早版本报 "Addon is not supported"）。其余功能（MiniMax / RunningHub / 火山方舟）在 25.6 上不受影响。CLI 安装见 [docs/agent-install.md](docs/agent-install.md) |
-| 抓视频依赖 | **Adobe Media Encoder（AME）必须已安装并能正常启动**：抓视频基于 Premiere UXP 的 [`EncoderManager.exportSequence`](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/encodermanager)，按官方文档说明，该 API 的转码由 AME 后台执行（`exportType` 含 `QUEUE_TO_AME`，事件如 `EVENT_RENDER_COMPLETE / ERROR / PROGRESS` 也由 AME 广播）；`EncoderManager` 还提供了 `isAMEInstalled` 属性用于检测。**Win / Mac 若仅装 Premiere 而未装 / 未授权 AME，抓视频将无法完成**；抓帧（基于 `Exporter.exportSequenceFrame`）不受此影响 |
+| 抓视频依赖 | **Adobe Media Encoder（AME）必须已安装并能正常启动**：抓视频基于 Premiere UXP 的 [`EncoderManager.exportSequence`](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/encodermanager)，按官方文档说明，该 API 的转码由 AME 后台执行（`exportType` 含 `QUEUE_TO_AME`，事件如 `EVENT_RENDER_COMPLETE / ERROR / PROGRESS` 也由 AME 广播）；`EncoderManager` 还提供了 `isAMEInstalled` 属性用于检测。**Win / Mac 若仅装 Premiere 而未装 / 未授权 AME，抓视频将无法完成**；抓帧（基于 `Exporter.exportSequenceFrame`）不受此影响。不想装 AME → 可改用 [CEP 版](https://github.com/vark-debug/rocx-cep)，抓视频免 AME（见下方小节） |
+
+### CEP 版本：PR 低于 25.6 / 免 AME 的替代方案
+
+我们同时维护一个 **CEP 架构的兄弟仓库 [rocx-cep](https://github.com/vark-debug/rocx-cep)**，把同一套面板思路移植到了 CEP，适合两类用户：
+
+- **PR 版本低于 25.6**（本 UXP 插件装不上）—— CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
+- **不想安装 / 没有授权 Adobe Media Encoder** —— CEP 版抓视频走 Premiere 内置导出管线，**无 AME 依赖**
+
+CEP 版当前与本仓库的能力差异：
+
+| 能力 | CEP 版 |
+| --- | --- |
+| 可灵生成（文生视频 / 图生视频 / 文生图 / 图生图，走 `kling` CLI 登录态，**无需 API Key**） | ✅ |
+| 抓帧 / 抓帧→PS / 抓视频（免 AME）/ 提示词模板 / 智能填参 / 生成记录 | ✅ |
+| MiniMax / RunningHub / 火山方舟（HTTP API 平台） | ❌ 暂未接入 |
+| 飞书多维表格上报 | ❌ 暂无 |
+
+安装方式（ZIP 解压到 CEP 扩展目录，或 ZXP 拖装；同样需要 `kling` CLI）见 [rocx-cep README](https://github.com/vark-debug/rocx-cep#readme)。agent 自动化安装时，可灵 CLI 部分与 [docs/agent-install.md](docs/agent-install.md) §3 / §4 通用。
 
 ### 网络白名单
 
