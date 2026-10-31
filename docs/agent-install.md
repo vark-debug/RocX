@@ -6,7 +6,7 @@
 > 本文档所有路径、命令、目录结构均为**本机实测结论**（macOS 26.x / arm64 / Premiere Pro 26.5.0 / Adobe UXP 8.x）。
 > 与项目内置的 [README](../README.md) 面向「最终用户手动安装」，两者分工不同。
 >
-> **目标机器 PR < 25.6（如 PR 2021），或没有 / 不想装 AME？** → 改装 CEP 版兄弟仓库 **[rocx-cep](https://github.com/vark-debug/rocx-cep)**，见下文「[CEP 版替代方案](#cep-版替代方案pr--256--免-ame)」章节（其可灵 CLI 步骤与本文 §3 / §4 完全通用）。
+> **目标机器 PR < 26.2（如 PR 2021），或没有 / 不想装 AME？** → 改装 CEP 版兄弟仓库 **[rocx-cep](https://github.com/vark-debug/rocx-cep)**，见下文「[CEP 版替代方案](#cep-版替代方案pr--262--免-ame)」章节（其可灵 CLI 步骤与本文 §3 / §4 完全通用）。
 
 ---
 
@@ -19,7 +19,7 @@
 | 3 | 登录可灵 CLI | ⚠️ 半自动 | **浏览器点一次「同意」** | [§4](#4-登录可灵-cli) |
 | 4 | 校验与收尾 | ✅ 全自动 | 无 | [§5](#5-校验与收尾) |
 
-> **前置探测发现 PR < 25.6、或用户明确不想装 AME？** 别硬装 UXP 版 —— 改装 CEP 版兄弟仓库 [rocx-cep](https://github.com/vark-debug/rocx-cep)，见下文「CEP 版替代方案」章节。
+> **前置探测发现 PR < 26.2、或用户明确不想装 AME？** 别硬装 UXP 版 —— 改装 CEP 版兄弟仓库 [rocx-cep](https://github.com/vark-debug/rocx-cep)，见下文「CEP 版替代方案」章节。
 
 **agent 的一句话职责**：跑完 §2 → §3 → §4 的命令，把 §4 里「请用户在浏览器里点同意」这句话转告用户，然后跑 §5 确认就绪。
 
@@ -42,7 +42,7 @@ uname -m                       # 期望: arm64 或 x86_64
 # 2) Premiere Pro 是否安装 + 版本
 ls -d /Applications/Adobe\ Premiere\ Pro*/Adobe\ Premiere\ Pro*.app 2>/dev/null
 defaults read "$(ls -d /Applications/Adobe\ Premiere\ Pro*/Adobe\ Premiere\ Pro*.app | head -1)/Contents/Info.plist" CFBundleShortVersionString
-# 最低要求 25.6.0（manifest host.minVersion）
+# 最低要求 26.2.0（manifest host.minVersion；Adobe 官方对 Hybrid 插件的最低要求）
 
 # 3) Premiere Pro 是否正在运行（决定能不能立刻生效）
 pgrep -f "Adobe Premiere Pro" >/dev/null && echo "运行中" || echo "未运行"
@@ -64,18 +64,18 @@ npm prefix -g
 |---|---|
 | PR 未运行 | ✅ 最佳时机，装完插件直接让用户开 PR 即可生效 |
 | PR 运行中 | 装完插件**必须重启 PR**（§2.4） |
-| PR 版本 < 25.6.0 | ⛔ UXP 版无法加载（Hybrid addon 需要 PR 25.6+）→ **改装 CEP 版**（见下文「CEP 版替代方案」） |
+| PR 版本 < 26.2.0 | ⛔ UXP 版无法加载（官方对 Hybrid 插件的最低要求是 PR 26.2）→ **改装 CEP 版**（见下文「CEP 版替代方案」） |
 | node 缺失 | 先装 node（[§6.2](#62-node-缺失)） |
 | npm prefix 不可写 | 改用自定义 prefix（[§3.3](#33-prefix-不可写时的降级方案)） |
 | AME 缺失 | 不阻塞安装；告知用户「抓视频功能不可用」，或建议改装 CEP 版（抓视频免 AME） |
 
 ---
 
-## CEP 版替代方案（PR < 25.6 / 免 AME）
+## CEP 版替代方案（PR < 26.2 / 免 AME）
 
 [rocx-cep](https://github.com/vark-debug/rocx-cep) 是本项目的 **CEP 架构兄弟仓库**。目标机器命中以下任一情况时，应改装它而不是继续走本文的 UXP 安装流程：
 
-- **PR 版本低于 25.6** —— UXP 版的 Hybrid addon 装不上；CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
+- **PR 版本低于 26.2** —— UXP 版的 Hybrid addon 装不上（官方对 Hybrid 插件的最低要求是 PR 26.2）；CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
 - **没有 / 不想装 Adobe Media Encoder** —— CEP 版抓视频走 PR 内置导出管线，**无 AME 依赖**
 
 当前能力边界：**仅可灵**一个生成后端（文生视频 / 图生视频 / 文生图 / 图生图，走 `kling` CLI 登录态，无需 API Key）；MiniMax / RunningHub / 火山方舟 等 HTTP API 平台与飞书多维表格上报**暂未接入**。抓帧 / 抓帧→PS / 抓视频 / 提示词模板 / 智能填参 / 生成记录均已具备。
@@ -569,7 +569,7 @@ public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 
 | 现象 | 原因 | 处理 |
 |---|---|---|
-| PR 里看不到 RocX 面板 | PR 未重启 / 插件目录没落地 / PR 版本 < 25.6 | 重启 PR；`ls` 目录；查 PR 版本 —— 版本 < 25.6 → 改装 CEP 版（见「CEP 版替代方案」） |
+| PR 里看不到 RocX 面板 | PR 未重启 / 插件目录没落地 / PR 版本 < 26.2 | 重启 PR；`ls` 目录；查 PR 版本 —— 版本 < 26.2 → 改装 CEP 版（见「CEP 版替代方案」） |
 | 面板出现但提示「可灵环境未就绪」 | CLI 未装或未登录 | 跑 §3.4 / §4.4 验证 |
 | `env: node: No such file or directory` | 用了 shebang 脚本且 PATH 精简 | 改用 `node + npm-cli.js`（§3.2） |
 | `kling login` 浏览器不弹 | 无头环境 / `open` 失败 | 从 stderr 抓 URL 手动 `open`（§4.3） |
@@ -588,7 +588,7 @@ public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 ## RocX 安装任务清单（macOS）
 
 - [ ] 0. 跑前置探测（§1），记录 PR 版本 / node / npm prefix 可写性 / AME
-  - **PR < 25.6 → 改走「CEP 版替代方案」章节，跳过下面第 1 步**（§3 / §4 的可灵 CLI 步骤照旧）
+  - **PR < 26.2 → 改走「CEP 版替代方案」章节，跳过下面第 1 步**（§3 / §4 的可灵 CLI 步骤照旧）
   - AME 缺失 → 不阻塞，收尾时提醒用户（或按需建议 CEP 版）
 - [ ] 1. 下载 CCX：`curl -fL -o /tmp/rocx.ccx https://github.com/vark-debug/RocX/releases/download/v0.4.1/com.rocx.uxp_premierepro.ccx`
 - [ ] 2. UPIA 安装：`"$UPIA" --install /tmp/rocx.ccx`，验证目录 + manifest.json + addon 在位
@@ -613,5 +613,5 @@ public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 | `login` 的 PKCE + loopback 8787-8790 + 5 分钟超时 + `.credentials` 路径 | 读 CLI 源码 `login()` |
 | `who_am_i --quiet` 的输出结构 | 实机执行 |
 | 插件的 CLI 定位逻辑（node + npm-cli.js，探测 cli-cn / cli-global） | 读 [src/core/klingCli.ts](../src/core/klingCli.ts) |
-| PR 版本要求 25.6+ | 读 [uxp.config.ts](../uxp.config.ts) 的 `host.minVersion` |
+| PR 版本要求 26.2+ | 读 [uxp.config.ts](../uxp.config.ts) 的 `host.minVersion`（官方对 Hybrid 插件的最低要求） |
 | 抓视频依赖 AME | 读 [README](../README.md) 环境要求表 |

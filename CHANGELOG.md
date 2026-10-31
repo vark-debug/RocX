@@ -4,6 +4,15 @@
 >
 > **追溯补录（2026-10-25）**：v0.4.0 发布时未同步写入本文件，以下章节由 [GitHub Release](https://github.com/vark-debug/RocX/releases/tag/v0.4.0) 正文回填。
 
+## 未发布
+
+- **最低版本要求提至 PR 26.2（官方口径）**：本插件是 UXP Hybrid 插件（内嵌 C++ uxpaddon），Adobe 官方对 [Hybrid 插件](https://developer.adobe.com/premiere-pro/uxp/plugins/hybrid-plugins/) 的 Minimum Requirements 明确 **Premiere 26.2** —— manifest 的 `host.minVersion` 由 25.6.0 提到 **26.2.0**。此前 25.6 下限只覆盖 UXP DOM 能力，可灵在 25.6 上本来就不可用（addon 加载即报错），与其留一个半残的 25.6，不如按官方口径统一收口，低版本用户引导改用 [rocx-cep](https://github.com/vark-debug/rocx-cep)（CEP 版）
+  - README / agent-install 全部版本表述同步改为 26.2 口径（探测决策、故障速查、执行清单、版本要求说明）
+  - DOM API 兼容性结论不变（全部 API 在 25.6 已可用），26.2 之上无额外约束
+- **文档补充 CEP 版兄弟仓库指引**（[rocx-cep](https://github.com/vark-debug/rocx-cep)）
+  - README「环境要求」新增「CEP 版本」小节：PR 低于 26.2（如 PR 2021，CEP 版实测 Windows）或不想依赖 AME（CEP 版抓视频免 AME）的用户可改用 CEP 版；列明能力差异（当前仅可灵 CLI 后端，HTTP API 平台与飞书上报暂未接入）
+  - agent-install 指南：新增「CEP 版替代方案」章节（ZIP 解压 + PlayerDebugMode 安装步骤，无需 UPIA），§0 速查 / §1 探测决策表 / §6.1 AME / §7 故障速查 / §8 执行清单同步加入改道指引 —— 可灵 CLI 安装与登录（§3 / §4）对两版通用
+
 ## v0.6.1 (2026-10-29)
 
 新增**可灵（Kling）图片生成** —— 文生图 / 图生图，与已有的可灵视频共用同一份服务端模型清单与 CLI 登录态。
@@ -62,9 +71,6 @@
   - 此前各平台 addon 产物不入库，打出同时含 mac / win addon 的 CCX 必须靠人工在各平台分别编译、再手工拷贝产物 —— 极易把 Windows 产物误放进 `mac/arm64/`，导致 macOS 侧 addon 加载失败、静默降级到 launcher 脚本
   - 解除屏蔽后，mac 上执行 `npm run build` / `npm run ccx` 即可产出双平台 addon 齐全的安装包
   - 新增 `.gitattributes` 保护二进制：仓库 `core.autocrlf=true`，而 `.uxpaddon` 是裸二进制（Mach-O dylib / PE DLL，非 zip），一旦被 CRLF 转换文件结构即损坏、UEP 加载即失败。用 `*.uxpaddon binary` 关闭文本转换、diff 与合并；另把 `.sh` / `launcher.command` 固定为 LF，避免 macOS 上因 CRLF 导致 shebang 失效
-- **文档补充 CEP 版兄弟仓库指引**（[rocx-cep](https://github.com/vark-debug/rocx-cep)）
-  - README「环境要求」新增「CEP 版本」小节：PR 低于 25.6（如 PR 2021，CEP 版实测 Windows）或不想依赖 AME（CEP 版抓视频免 AME）的用户可改用 CEP 版；列明能力差异（当前仅可灵 CLI 后端，HTTP API 平台与飞书上报暂未接入）
-  - agent-install 指南：新增「CEP 版替代方案」章节（ZIP 解压 + PlayerDebugMode 安装步骤，无需 UPIA），§0 速查 / §1 探测决策表 / §6.1 AME / §7 故障速查 / §8 执行清单同步加入改道指引 —— 可灵 CLI 安装与登录（§3 / §4）对两版通用
 
 ### 兼容性
 

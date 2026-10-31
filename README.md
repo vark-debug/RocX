@@ -21,19 +21,19 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| 软件 | Adobe Premiere Pro **25.6.4 或更高版本**（可灵功能需 **26.2+**，见下方说明；**更低版本可用 [CEP 版](https://github.com/vark-debug/rocx-cep)**，见下方小节） |
+| 软件 | Adobe Premiere Pro **26.2 或更高版本**（官方对 Hybrid 插件的最低要求，见[版本要求说明](#版本要求说明)；**更低版本可用 [CEP 版](https://github.com/vark-debug/rocx-cep)**，见下方小节） |
 | 操作系统 | **Windows** 与 **macOS**（v0.2.0 起双平台全量验证） |
 | 安装方式 | UXP 插件（CCX 包，manifest v6） |
 | 网络 | 需可达各 provider 域名（见下方[网络白名单](#网络白名单)） |
 | 账号 | 对应平台签发的 API Key（详见[配置 API Key](#配置-api-key)）；**可灵不需要 API Key**，需本机已安装 `kling` CLI 并完成登录 |
-| 可灵功能依赖 | **Adobe PR ≥ 26.2 + 本机已安装并登录的 `kling` CLI**：可灵走 C++ Hybrid addon 的 `runCommand` 调本机 CLI，而 addon 仅在 PR 26.2+ 可加载（更早版本报 "Addon is not supported"）。其余功能（MiniMax / RunningHub / 火山方舟）在 25.6 上不受影响。CLI 安装见 [docs/agent-install.md](docs/agent-install.md) |
+| 可灵功能依赖 | **本机已安装并登录的 `kling` CLI**：可灵走 C++ Hybrid addon 的 `runCommand` 调本机 CLI（插件整体要求 PR ≥ 26.2，正是官方对 Hybrid 插件的最低版本要求）。CLI 安装见 [docs/agent-install.md](docs/agent-install.md) |
 | 抓视频依赖 | **Adobe Media Encoder（AME）必须已安装并能正常启动**：抓视频基于 Premiere UXP 的 [`EncoderManager.exportSequence`](https://developer.adobe.com/premiere-pro/uxp/ppro-reference/classes/encodermanager)，按官方文档说明，该 API 的转码由 AME 后台执行（`exportType` 含 `QUEUE_TO_AME`，事件如 `EVENT_RENDER_COMPLETE / ERROR / PROGRESS` 也由 AME 广播）；`EncoderManager` 还提供了 `isAMEInstalled` 属性用于检测。**Win / Mac 若仅装 Premiere 而未装 / 未授权 AME，抓视频将无法完成**；抓帧（基于 `Exporter.exportSequenceFrame`）不受此影响。不想装 AME → 可改用 [CEP 版](https://github.com/vark-debug/rocx-cep)，抓视频免 AME（见下方小节） |
 
-### CEP 版本：PR 低于 25.6 / 免 AME 的替代方案
+### CEP 版本：PR 低于 26.2 / 免 AME 的替代方案
 
 我们同时维护一个 **CEP 架构的兄弟仓库 [rocx-cep](https://github.com/vark-debug/rocx-cep)**，把同一套面板思路移植到了 CEP，适合两类用户：
 
-- **PR 版本低于 25.6**（本 UXP 插件装不上）—— CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
+- **PR 版本低于 26.2**（本 UXP 插件装不上）—— CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
 - **不想安装 / 没有授权 Adobe Media Encoder** —— CEP 版抓视频走 Premiere 内置导出管线，**无 AME 依赖**
 
 CEP 版当前与本仓库的能力差异：
@@ -73,10 +73,11 @@ manifest 的 `requiredPermissions.network.domains` 已按当前 provider 维护�
 | `Exporter.exportSequenceFrame`（抓帧） | 25.6 |
 | `EncoderManager.getManager` / `exportSequence`（抓视频） | 25.6 |
 
-即插件**没有使用任何 26.5 才新增的 API**（26.5 新增的 `C2PAService`、`MediaManager`、`WorkAreaUtils`、`Media.getStart/getDuration` 等均未使用），也未使用任何 26.3 才强制的语法特性（如 `create*Action` 在 `lockedAccess` 内的硬性约束），因此理论上可在 **Premiere 25.6 / 26.0 / 26.2 / 26.3 / 26.5** 全系 UXP 8.x 上运行。要求 25.6.0 的原因：
+即插件**没有使用任何 26.5 才新增的 API**（26.5 新增的 `C2PAService`、`MediaManager`、`WorkAreaUtils`、`Media.getStart/getDuration` 等均未使用），也未使用任何 26.3 才强制的语法特性（如 `create*Action` 在 `lockedAccess` 内的硬性约束），因此 **DOM 层面对 26.2 以上的版本没有额外约束**。
 
-- 插件 manifest 采用 manifestVersion 6，UI 由 WebView 承载，`allowLocalRendering` 需 UXP 8.0+（官方版本对照：Premiere 26.0.2 起集成 UXP 8.1；Premiere 25.6 自带 UXP 8.1）
-- 25.6 为官方 UXP for Premiere 的**正式首发版本**（[Adobe Changelog](https://developer.adobe.com/premiere-pro/uxp/changelog/)）；v0.2.0 已在 **Premiere 25.6.4 / 26.x + Windows / macOS** 双平台完成全流程验证
+**要求 26.2 的原因**：本插件是 **UXP Hybrid 插件**（内嵌 C++ uxpaddon，可灵桥接正是靠它），Adobe 官方对 Hybrid 插件的 [Minimum Requirements](https://developer.adobe.com/premiere-pro/uxp/plugins/hybrid-plugins/) 明确要求 **Premiere 26.2**（UXP Developer Tool 2.2 / Creative Cloud Desktop 5.10）；更早版本加载 addon 即报 `Addon is not supported`。
+
+- 历史说明：v0.2.0–v0.6.1 时期 manifest 的 `host.minVersion` 曾为 25.6.0（DOM API 层面 25.6 即够用，25.6 上除可灵外的功能均可运行，且已在 Premiere 25.6.4 / 26.x + Windows / macOS 完成过全流程验证）；自本版本起按官方口径统一提到 **26.2.0**，低版本用户请改用 [CEP 版](https://github.com/vark-debug/rocx-cep)
 
 ### 关于 Adobe UXP 版本对照（自核验）
 
@@ -87,13 +88,13 @@ manifest 的 `requiredPermissions.network.domains` 已按当前 provider 维护�
 
 ### 类型包说明
 
-`@adobe/premierepro` npm 类型包**最低版本是 26.2.0**（官方未发布 25.6.0 类型包）；本项目保留使用 `@adobe/premierepro@26.5.0` 作为构建时类型参考，但 manifest 的 `host.minVersion` 仍为 25.6.0 —— 运行时实际依赖的 DOM API 全部在 25.6 已可用（参见上表）。
+`@adobe/premierepro` npm 类型包**最低版本是 26.2.0**（官方未发布更早的类型包）；本项目使用 `@adobe/premierepro@26.5.0` 作为构建时类型参考，manifest 的 `host.minVersion` 为 **26.2.0**（Hybrid 插件官方下限，见[版本要求说明](#版本要求说明)）—— 类型包下限与运行下限恰好一致，DOM API 则全部在 25.6 已可用（参见上表）。
 
-### Action 锁规范（25.6 / 26.3 通用）
+### Action 锁规范（26.x 通用）
 
 - `lockedAccess` 回调内**不再使用 async**（Adobe 官方 ESLint 规则 [`no-async-in-lock-scope`](https://github.com/adobe/eslint-plugin-premierepro/blob/main/docs/rules/no-async-in-lock-scope.md)）
 - 所有 `create*Action` 在 `executeTransaction` 内同步创建并通过 `compoundAction.addAction` 提交
-- 26.3 才强制的"`create*Action` 必须在 `lockedAccess` 内创建"在 25.6 上**已默认满足**（本项目一直用 `lockedAccess(executeTransaction(...))` 嵌套结构）
+- 26.3 才强制的"`create*Action` 必须在 `lockedAccess` 内创建"在更低版本上**已默认满足**（本项目一直用 `lockedAccess(executeTransaction(...))` 嵌套结构）
 
 ## 安装
 

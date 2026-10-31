@@ -27,10 +27,13 @@ const manifest: UXP_Manifest = {
   host: [
     {
       app: "premierepro",
-      // Adobe UXP Hybrid Plugin 最低要求 PR 25.6(2025-06 GA)。
-      // PR < 25.6 没有 addon runtime,加载即报 "Addon is not supported"。
-      // https://developer.adobe.com/premiere-pro/uxp/plugins/hybrid-plugins/build
-      minVersion: "25.6.0",
+      // Adobe 官方对 UXP Hybrid Plugin 的最低要求是 PR 26.2（Minimum Requirements 表）。
+      // 本插件是 Hybrid 插件（内嵌 C++ uxpaddon），按官方口径把下限提到 26.2；
+      // 更早版本加载 addon 即报 "Addon is not supported"（此前 25.6.0 下限只覆盖
+      // UXP DOM 能力，但可灵在 25.6 上本来就用不了，与其留一个半残的 25.6，不如
+      // 让低版本用户走 CEP 版兄弟仓库 rocx-cep）。
+      // https://developer.adobe.com/premiere-pro/uxp/plugins/hybrid-plugins/
+      minVersion: "26.2.0",
     },
   ],
   /**
