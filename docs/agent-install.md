@@ -6,7 +6,9 @@
 > 本文档所有路径、命令、目录结构均为**本机实测结论**（macOS 26.x / arm64 / Premiere Pro 26.5.0 / Adobe UXP 8.x）。
 > 与项目内置的 [README](../README.md) 面向「最终用户手动安装」，两者分工不同。
 >
-> **目标机器 PR < 26.2（如 PR 2021），或没有 / 不想装 AME？** → 改装 CEP 版兄弟仓库 **[rocx-cep](https://github.com/vark-debug/rocx-cep)**，见下文「[CEP 版替代方案](#cep-版替代方案pr--262--免-ame)」章节（其可灵 CLI 步骤与本文 §3 / §4 完全通用）。
+> **安装 UXP 版前先过三道门槛，任一不达标就改装 CEP 版**：
+> ① **PR ≥ 26.2**（官方对 Hybrid 插件的最低要求）　② **AME 已安装**　③ **UPIA 命令有效**
+> → 改装 CEP 版兄弟仓库 **[rocx-cep](https://github.com/vark-debug/rocx-cep)**，见下文「[CEP 版替代方案](#cep-版替代方案pr--262--无-ame--upia-无效)」章节（其可灵 CLI 步骤与本文 §3 / §4 完全通用）。
 
 ---
 
@@ -19,7 +21,7 @@
 | 3 | 登录可灵 CLI | ⚠️ 半自动 | **浏览器点一次「同意」** | [§4](#4-登录可灵-cli) |
 | 4 | 校验与收尾 | ✅ 全自动 | 无 | [§5](#5-校验与收尾) |
 
-> **前置探测发现 PR < 26.2、或用户明确不想装 AME？** 别硬装 UXP 版 —— 改装 CEP 版兄弟仓库 [rocx-cep](https://github.com/vark-debug/rocx-cep)，见下文「CEP 版替代方案」章节。
+> **三道门槛（§1 探测后判定）**：① PR ≥ 26.2　② AME 已安装　③ UPIA 命令有效 —— **任一不达标 → 不装 UXP 版，改装 CEP 版**（[rocx-cep](https://github.com/vark-debug/rocx-cep)，见下文「CEP 版替代方案」章节），只跳过 §2，§3 / §4 照做。
 
 **agent 的一句话职责**：跑完 §2 → §3 → §4 的命令，把 §4 里「请用户在浏览器里点同意」这句话转告用户，然后跑 §5 确认就绪。
 
@@ -27,7 +29,6 @@
 
 - API Key（MiniMax / RunningHub / 火山方舟）—— 用户自己在插件设置页填，agent 不碰
 - 可灵账号密码 —— agent 不碰，只引导走 OAuth
-- 抓视频依赖的 **Adobe Media Encoder (AME)** —— 第三方软件，需用户自行安装（[§6](#6-依赖与前置检查)）
 
 ---
 
@@ -56,27 +57,40 @@ command -v node && node -v        # 最低 v18，实测 v24.18.0 可用
 # 6) npm 全局 prefix 是否可写（决定装到哪）
 npm prefix -g
 [ -w "$(npm prefix -g)" ] && echo "可写" || echo "不可写 → 需改 prefix，见 §3.3"
+
+# 7) UPIA 是否有效（UXP 插件唯一合规安装通道，门槛 ③）
+UPIA="/Library/Application Support/Adobe/Adobe Desktop Common/RemoteComponents/UPI/UnifiedPluginInstallerAgent/UnifiedPluginInstallerAgent.app/Contents/MacOS/UnifiedPluginInstallerAgent"
+[ -x "$UPIA" ] && echo "UPIA 在位" || echo "UPIA 缺失/无效 → 改装 CEP 版"
 ```
 
-**探测结论决定后续动作**：
+**探测结论决定后续动作 —— 先过三道门槛，任一不达标 → 改装 CEP 版**：
+
+| 门槛 | 探测项 | 达标 | 不达标 |
+|---|---|---|---|
+| ① | PR 版本 | ≥ 26.2.0 | **< 26.2 → 改装 CEP 版**（官方对 Hybrid 插件的最低要求，UXP 版无法加载） |
+| ② | Adobe Media Encoder | 已安装 | **无 AME → 改装 CEP 版**（抓视频免 AME；agent 无法代装 AME，见 §6.1） |
+| ③ | UPIA 命令 | 可执行（§1 探测 #7） | **UPIA 无效 → 改装 CEP 版**（CEP 版 ZIP 解压即装，无需 UPIA / UPI.db） |
+
+**三道门槛全过**后，再看这几项执行细节：
 
 | 探测结果 | 动作 |
 |---|---|
 | PR 未运行 | ✅ 最佳时机，装完插件直接让用户开 PR 即可生效 |
-| PR 运行中 | 装完插件**必须重启 PR**（§2.4） |
-| PR 版本 < 26.2.0 | ⛔ UXP 版无法加载（官方对 Hybrid 插件的最低要求是 PR 26.2）→ **改装 CEP 版**（见下文「CEP 版替代方案」） |
+| PR 运行中 | 装完插件**必须重启 PR**（§2.3） |
 | node 缺失 | 先装 node（[§6.2](#62-node-缺失)） |
 | npm prefix 不可写 | 改用自定义 prefix（[§3.3](#33-prefix-不可写时的降级方案)） |
-| AME 缺失 | 不阻塞安装；告知用户「抓视频功能不可用」，或建议改装 CEP 版（抓视频免 AME） |
 
 ---
 
-## CEP 版替代方案（PR < 26.2 / 免 AME）
+## CEP 版替代方案（PR < 26.2 / 无 AME / UPIA 无效）
 
-[rocx-cep](https://github.com/vark-debug/rocx-cep) 是本项目的 **CEP 架构兄弟仓库**。目标机器命中以下任一情况时，应改装它而不是继续走本文的 UXP 安装流程：
+[rocx-cep](https://github.com/vark-debug/rocx-cep) 是本项目的 **CEP 架构兄弟仓库**。§1 的三道门槛**任一不达标**时，必须改装它而不是继续走本文的 UXP 安装流程：
 
-- **PR 版本低于 26.2** —— UXP 版的 Hybrid addon 装不上（官方对 Hybrid 插件的最低要求是 PR 26.2）；CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
-- **没有 / 不想装 Adobe Media Encoder** —— CEP 版抓视频走 PR 内置导出管线，**无 AME 依赖**
+- **门槛 ①：PR 版本 < 26.2** —— UXP 版的 Hybrid addon 装不上（官方对 Hybrid 插件的最低要求是 PR 26.2）；CEP 版实测 **PR 2021（Windows）** 与 **PR 2026（macOS）**
+- **门槛 ②：无 Adobe Media Encoder** —— UXP 版抓视频依赖 AME 且 agent 无法代装；CEP 版抓视频走 PR 内置导出管线，**无 AME 依赖**
+- **门槛 ③：UPIA 命令无效** —— UXP 版的安装与卸载都依赖 UPIA（没装 Creative Cloud Desktop / 企业版精简部署时常见）；CEP 版 **ZIP 解压即装**，无需 UPIA 与 UPI.db 登记
+
+> 三道门槛全过 → 回到 §2 走正常 UXP 安装；本章节只在门槛不达标时走。
 
 当前能力边界：**仅可灵**一个生成后端（文生视频 / 图生视频 / 文生图 / 图生图，走 `kling` CLI 登录态，无需 API Key）；MiniMax / RunningHub / 火山方舟 等 HTTP API 平台与飞书多维表格上报**暂未接入**。抓帧 / 抓帧→PS / 抓视频 / 提示词模板 / 智能填参 / 生成记录均已具备。
 
@@ -102,17 +116,17 @@ defaults write com.adobe.CSXS.12 PlayerDebugMode 1
 
 ## 2. 安装插件本体
 
-### 2.1 两条可选路径
+### 2.1 安装路径：只有 UPIA 一条
 
 | 路径 | 手段 | 是否需要人点 | 适用 |
 |---|---|---|---|
-| **A（推荐）** | Adobe 官方 **UPIA** 命令行安装器 | ❌ 不需要 | **agent 自动化首选** |
-| B | 手动拷贝目录 | ❌ 不需要 | UPIA 不可用时的降级 |
+| **UPIA（唯一路径）** | Adobe 官方 **UPIA** 命令行安装器 | ❌ 不需要 | 门槛 ③ 已保证 UPIA 可用 |
 
 > **重要**：Adobe 官方文档明确写了「**不能**像 CEP 那样直接把插件文件写进 UXP 插件目录」——因为 UXP 需要同步更新注册数据库。
 > 走 UPIA 就是让 Adobe 自己的工具去写数据库，这是唯一「静默且合规」的路径。
+> **没有降级方案**：UPIA 无效（门槛 ③ 不达标）→ 不做手动拷贝尝试，直接改装 CEP 版（见「CEP 版替代方案」）—— 手动拷贝还要手改 UPI.db 注册表，实测不可靠，已废弃。
 
-### 2.2 路径 A：UPIA 命令行安装（推荐）
+### 2.2 UPIA 命令行安装
 
 UPIA（Unified Plugin Installer Agent）随 Adobe Creative Cloud 一起安装，**macOS 上是 root 权限的只读系统路径**：
 
@@ -205,29 +219,7 @@ sqlite3 -header -column "$DB" \
 > ⚠️ 注意 `DELETE` 的 `WHERE` **必须同时限定 `ExtName='rocx'`**。
 > 只写 `ExtID NOT IN (...)` 会把**其它插件**（Smart-Export / timelinebarstudio 等）的记录一起删掉 —— 实测踩过这个坑。
 
-### 2.3 路径 B：手动拷贝（降级方案）
-
-若 UPIA 不存在（没装 Creative Cloud Desktop / 企业版精简部署），可手动拷贝。但要**同时**手工补注册表，否则 PR 扫不到。
-
-```bash
-DEST="/Library/Application Support/Adobe/UXP/Plugins/$(whoami)/External/com.rocx.uxp_premierepro_0.4.1"
-
-# 1) 解包 CCX
-mkdir -p /tmp/rocx-unpack && cd /tmp/rocx-unpack
-unzip -oq /tmp/rocx.ccx
-
-# 2) 拷到目标目录（目录名必须是 <pluginId>_<app>_<version>）
-sudo mkdir -p "$DEST"
-sudo cp -R /tmp/rocx-unpack/. "$DEST/"
-
-# 3) 手工登记进 UPI.db（字段参考本机已有的其它插件）
-#    ExtName=rocx, ExtVersion=<版本>, ExtIDInFile=com.rocx.uxp_premierepro
-```
-
-> ⚠️ 步骤 3 的字段与 `Tb_ExtBasicInfo` 的其它列（`FilePath` / `NeedRestart` / `ExtDestType` 等）耦合，
-> **不建议 agent 手改 sqlite**。优先回到路径 A；路径 B 仅在「确认 PR 能扫到目录」的机器上用（可先拷完重启 PR 验证面板出不出来）。
-
-### 2.4 重启 Premiere Pro
+### 2.3 重启 Premiere Pro
 
 **这是唯一的硬性人工步骤。** UXP 插件在 PR 启动时扫描插件目录，运行中拷贝不会生效。
 
@@ -251,7 +243,7 @@ osascript -e 'tell application "Adobe Premiere Pro 2026" to quit'
 
 **验证插件已加载**：重启后打开面板 **窗口 > 扩展 > RocX**，面板出现即成功。
 
-### 2.5 卸载（agent 需要回滚时）
+### 2.4 卸载（agent 需要回滚时）
 
 ```bash
 UPIA="/Library/Application Support/Adobe/Adobe Desktop Common/RemoteComponents/UPI/UnifiedPluginInstallerAgent/UnifiedPluginInstallerAgent.app/Contents/MacOS/UnifiedPluginInstallerAgent"
@@ -511,21 +503,21 @@ pgrep -f "Adobe Premiere Pro" >/dev/null && echo "⚠️  PR 运行中 → 需�
 > - 可灵账号已登录（用户 ID `<userId>`）
 >
 > ⚠️ 还需您做一件事：**重启 Premiere Pro**（窗口 > 扩展 > RocX 打开面板）
-> ⚠️ 抓视频功能需要 **Adobe Media Encoder**，本机未检测到 —— 请到 Adobe 官网安装后重启 PR。
+
+（AME 缺失不会走到这里 —— 门槛 ② 不达标时已改走 CEP 版，见「CEP 版替代方案」。）
 
 ---
 
 ## 6. 依赖与前置检查
 
-### 6.1 Adobe Media Encoder（AME）
+### 6.1 Adobe Media Encoder（AME）—— 门槛 ②
 
 **抓视频**（把工作区栏片段作为参考视频）依赖 AME：
 插件用 Premiere UXP 的 `EncoderManager.exportSequence`，转码由 AME 后台执行（`exportType` 含 `QUEUE_TO_AME`）。
 
-- AME 缺失 → 抓视频失败；**抓帧不受影响**
+- **本机无 AME → 不装 UXP 版，改装 CEP 版**（见「CEP 版替代方案」）—— CEP 版抓视频走 PR 内置导出管线，免 AME
+- agent 无法代装 AME（需 Creative Cloud 账号与授权），所以**没有「先装 AME 再回来装 UXP」的自动补救路径**；用户坚持用 UXP 版 → 自行装好 AME 后重跑本指南
 - 检测：`ls -d /Applications/Adobe\ Media\ Encoder*/Adobe\ Media\ Encoder*.app`
-- agent 无法代装（需 Creative Cloud 账号与授权），只能提示用户
-- 用户不想装 AME 的另一条路：改装 [rocx-cep](https://github.com/vark-debug/rocx-cep)（CEP 版，抓视频免 AME，见「CEP 版替代方案」）
 
 ### 6.2 node 缺失
 
@@ -577,7 +569,8 @@ public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 | 登录后 `who_am_i` 仍报未登录 | `login` 失败但被吞了 | 看 `~/.kling/logs/` 与 login 的 stderr |
 | 换了账号还是旧账号 | `login` 只吊销不清本地 | 先 `kling logout` 成功后再 `login` |
 | `file_upload` 慢（5s+） | 大文件 / 网络 | 正常；插件已做后台预上传优化 |
-| UPIA `--remove` 返回 -406 | **退出码不可信**，目录其实已删 | 用 `ls` 判成败（§2.5） |
+| UPIA 路径不存在 / 命令无效 | 没装 Creative Cloud Desktop / 企业版精简部署 | 门槛 ③ 不达标 → 改装 CEP 版（见「CEP 版替代方案」） |
+| UPIA `--remove` 返回 -406 | **退出码不可信**，目录其实已删 | 用 `ls` 判成败（§2.4） |
 | 插件目录在 `/Library/...` 需 sudo | UPIA 装到系统级目录 | 这是正常状态；用户级路径 `~/Library/Application Support/Adobe/UXP/Plugins/` 只装第三方手动装的插件 |
 
 ---
@@ -587,16 +580,15 @@ public-hybrid/win/x64/RocXBridge.uxpaddon     # Windows
 ```markdown
 ## RocX 安装任务清单（macOS）
 
-- [ ] 0. 跑前置探测（§1），记录 PR 版本 / node / npm prefix 可写性 / AME
-  - **PR < 26.2 → 改走「CEP 版替代方案」章节，跳过下面第 1 步**（§3 / §4 的可灵 CLI 步骤照旧）
-  - AME 缺失 → 不阻塞，收尾时提醒用户（或按需建议 CEP 版）
+- [ ] 0. 跑前置探测（§1），判定三道门槛：① PR ≥ 26.2　② AME 已安装　③ UPIA 命令有效
+  - **任一门槛不达标 → 改走「CEP 版替代方案」章节，跳过下面第 1~2 步**（§3 / §4 的可灵 CLI 步骤照旧）
 - [ ] 1. 下载 CCX：`curl -fL -o /tmp/rocx.ccx https://github.com/vark-debug/RocX/releases/download/v0.4.1/com.rocx.uxp_premierepro.ccx`
 - [ ] 2. UPIA 安装：`"$UPIA" --install /tmp/rocx.ccx`，验证目录 + manifest.json + addon 在位
 - [ ] 3. 装可灵 CLI：`"$NODE" "$NPMCLI" install -g @klingai/cli-cn`，验证 `kling-cli` 版本号
 - [ ] 4. 起 `kling login`（后台），转告用户「请在浏览器点同意授权」（5 分钟内有效）
 - [ ] 5. 验证登录：`who_am_i --quiet` 返回 ok:true
 - [ ] 6. 提示用户重启 Premiere Pro
-- [ ] 7. 跑体检脚本（§5.1），输出收尾报告（含 AME 缺失提醒）
+- [ ] 7. 跑体检脚本（§5.1），输出收尾报告
 ```
 
 ---

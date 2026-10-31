@@ -9,9 +9,9 @@
 - **最低版本要求提至 PR 26.2（官方口径）**：本插件是 UXP Hybrid 插件（内嵌 C++ uxpaddon），Adobe 官方对 [Hybrid 插件](https://developer.adobe.com/premiere-pro/uxp/plugins/hybrid-plugins/) 的 Minimum Requirements 明确 **Premiere 26.2** —— manifest 的 `host.minVersion` 由 25.6.0 提到 **26.2.0**。此前 25.6 下限只覆盖 UXP DOM 能力，可灵在 25.6 上本来就不可用（addon 加载即报错），与其留一个半残的 25.6，不如按官方口径统一收口，低版本用户引导改用 [rocx-cep](https://github.com/vark-debug/rocx-cep)（CEP 版）
   - README / agent-install 全部版本表述同步改为 26.2 口径（探测决策、故障速查、执行清单、版本要求说明）
   - DOM API 兼容性结论不变（全部 API 在 25.6 已可用），26.2 之上无额外约束
-- **文档补充 CEP 版兄弟仓库指引**（[rocx-cep](https://github.com/vark-debug/rocx-cep)）
+- **文档补充 CEP 版兄弟仓库指引**（[rocx-cep](https://github.com/vark-debug/rocx-cep)），agent-install 重构为「三道门槛」判定：**① PR ≥ 26.2　② AME 已安装　③ UPIA 命令有效 —— 任一不达标即改装 CEP 版**
   - README「环境要求」新增「CEP 版本」小节：PR 低于 26.2（如 PR 2021，CEP 版实测 Windows）或不想依赖 AME（CEP 版抓视频免 AME）的用户可改用 CEP 版；列明能力差异（当前仅可灵 CLI 后端，HTTP API 平台与飞书上报暂未接入）
-  - agent-install 指南：新增「CEP 版替代方案」章节（ZIP 解压 + PlayerDebugMode 安装步骤，无需 UPIA），§0 速查 / §1 探测决策表 / §6.1 AME / §7 故障速查 / §8 执行清单同步加入改道指引 —— 可灵 CLI 安装与登录（§3 / §4）对两版通用
+  - agent-install 指南按三门槛重构：新增「CEP 版替代方案」章节（ZIP 解压 + PlayerDebugMode 安装步骤，无需 UPIA）；AME 由「不阻塞安装、收尾提醒」升为**硬门槛**（§6.1，无 AME 直接改走 CEP 版）；UPIA 命令有效性升为**硬门槛**（新增探测 #7 与故障速查行）；**原「手动拷贝插件目录」降级路径（路径 B）废弃删除**——UXP 官方明确不能手动拷贝（需同步注册数据库），实测不可靠；门槛不达标时只跳过 §2，可灵 CLI 安装与登录（§3 / §4）对两版通用
 
 ## v0.6.1 (2026-10-29)
 
